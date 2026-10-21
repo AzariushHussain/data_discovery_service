@@ -1,0 +1,75 @@
+services:
+  service_db:
+    image: postgres:16-alpine
+    container_name: discovery_service_db
+    environment:
+      POSTGRES_USER: discovery_user
+      POSTGRES_PASSWORD: discovery_password
+      POSTGRES_DB: discovery_metadata
+    ports:
+      - "5433:5432"
+    volumes:
+      - service_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U discovery_user -d discovery_metadata"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  sample_source_db:
+    image: postgres:16-alpine
+    container_name: sample_customer_source_db
+    environment:
+      POSTGRES_USER: customer_ro
+      POSTGRES_PASSWORD: customer_password
+      POSTGRES_DB: ecommerce_prod
+    ports:
+      - "5434:5432"
+    volumes:
+      - ./seed/01_init_source.sql:/docker-entrypoint-initdb.d/01_init_source.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U customer_ro -d ecommerce_prod"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    container_name: discovery_api
+    environment:
+      DATABASE_URL: postgresql+psycopg://discovery_user:discovery_password@service_db:5432/discovery_metadata
+      SAMPLE_LIMIT: 200
+      STATEMENT_TIMEOUT_MS: 5000
+      OPENBAO_ADDR: http://openbao:8200
+      OPENBAO_MOUNT: discovery
+      OPENBAO_TOKEN_FILE: /run/secrets/openbao_token
+    ports:
+      - "8000:8000"
+    depends_on:
+      service_db:
+        condition: service_healthy
+      sample_source_db:
+        condition: service_healthy
+    secrets:
+      - openbao_token
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  openbao:
+    image: openbao/openbao:latest
+    command: ["server", "-config=/bao/config/config.hcl"]
+    environment:
+      BAO_ADDR: http://127.0.0.1:8200
+    ports:
+      - "127.0.0.1:8200:8200"
+    volumes:
+      - ./openbao/config.hcl:/bao/config/config.hcl:ro
+      - openbao_data:/bao/data
+
+volumes:
+  service_db_data:
+  openbao_data:
+
+secrets:
+  openbao_token:
+    file: ./.secrets/openbao-token.txt
