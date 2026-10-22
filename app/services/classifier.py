@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 import logging
 import re
 import unicodedata
@@ -91,12 +91,18 @@ class PIIClassifier:
         return bool(re.fullmatch(EMAIL_PATTERN, val))
 
     @classmethod
-    def _is_valid_dob(cls, val: str) -> bool:
+    def _is_valid_dob(cls, val: str, column_name: str) -> bool:
+        # Known transaction metadata reduces false positives; generic names remain eligible.
+        name = re.sub(r"([a-z])([A-Z])", r"\1_\2", column_name).lower()
+        if name in {
+            "order_date", "payment_date", "invoice_date", "transaction_date",
+            "created_at", "updated_at", "last_updated",
+        }:
+            return False
         for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
             try:
-                dt = datetime.strptime(val[:10], fmt)
-                # Valid birth year window: 1920 to 13 years ago
-                if 1920 <= dt.year <= (datetime.now().year - 13):
+                parsed = datetime.strptime(val, fmt).date()
+                if parsed <= date.today():
                     return True
             except ValueError:
                 continue
@@ -234,7 +240,7 @@ class PIIClassifier:
                 "PINCODE": cls._is_valid_pincode(val_clean) and not any(
                     k in column_name.lower() for k in {"id", "amount", "price", "count", "total", "invoice"}
                 ),
-                "DOB": cls._is_valid_dob(val_clean),
+                "DOB": cls._is_valid_dob(val_clean, column_name),
                 "FULL_NAME": is_free_text_col and cls._is_valid_full_name(val_clean, column_name),
                 "POSTAL_ADDRESS": is_free_text_col and cls._is_valid_postal_address(val_clean, column_name),
             }

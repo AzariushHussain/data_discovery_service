@@ -298,7 +298,9 @@ Discovery/sampling failures are not reported as empty successful samples. The sc
 
 ## Classification, confidence, and risk
 
-The custom classifier combines format validation and contextual rules. A misleading `notes` column containing standalone mobile numbers is detected from its values. A `phone` column containing nulls and junk does not become PII just because of its name. Names and addresses use additional structural/context signals; a column hint alone is insufficient.
+The custom classifier combines format validation and contextual rules. A misleading `notes` column containing standalone mobile numbers is detected from its values. A `phone` column containing nulls and junk does not become PII just because of its name. Names, addresses, and DOB use additional contextual signals; a column hint alone is insufficient.
+
+DOB candidates are detected from complete, valid, non-future date values, including in generic columns such as `notes` or `field_1`; a birth-related column name is not required. Children's birth dates are accepted; the former minimum-age cutoff is removed. Trailing prose and timestamp values are rejected. Known transaction-date names (`order_date`, `payment_date`, `invoice_date`, `transaction_date`, `created_at`, `updated_at`, and `last_updated`, including camelCase equivalents) suppress DOB matching to reduce false positives. A name alone never establishes PII. Date values cannot prove their business meaning: an unrelated date in an unrecognized column can still be labelled as a DOB candidate. This is a documented heuristic, not verified birth-date recognition.
 
 The highest whole-value match ratio wins if it is at least 0.25. This is an explicit sensitivity trade-off, not a statistically calibrated cutoff. Rare standalone PII below that threshold does not become the primary classification, but still contributes to risk and is named in the justification. All eight types, exact regexes, tie priority, name vocabulary, address signals, and exclusions are documented in [RULES.md](RULES.md).
 

@@ -58,7 +58,7 @@ The classifier receives the rendered datatype. Embedded scanning, standalone ful
 
 ## 4. Standalone value detectors
 
-Standalone means the entire cleaned value matches the detector, with the documented DOB parsing exception below. Formats are heuristic evidence, not identity verification.
+Standalone means the entire cleaned value matches the detector. Formats are heuristic evidence, not identity verification.
 
 ### EMAIL
 
@@ -121,7 +121,7 @@ This is a simple collision guard, not a token-aware metadata model. It can rejec
 
 ### DOB
 
-Try parsing the first ten characters with each format:
+Parse the entire cleaned value with each format; no birth-related column name is required:
 
 ```text
 %Y-%m-%d
@@ -130,9 +130,11 @@ Try parsing the first ten characters with each format:
 %Y/%m/%d
 ```
 
-Accept when the parsed year is between 1920 and `datetime.now().year - 13`, inclusive. The current year comes from the application's runtime clock.
+Split camelCase boundaries and lowercase the column name. Suppress DOB matching only for these exact known transaction-date names: `order_date`, `payment_date`, `invoice_date`, `transaction_date`, `created_at`, `updated_at`, and `last_updated`. Thus `invoiceDate` is also excluded. Other names, including generic `notes`, `field_1`, and `col_x`, remain eligible. Column names alone never bypass value validation.
 
-This checks years, not exact birthdays or exact ages. Recent transactional dates are rejected, but an old order date can look like a DOB. Values with a parseable leading date can match even with trailing text or a time component. No `dob`/`birth` column-name gate or transactional-column exclusion is implemented. Birth dates for children under the year cutoff are missed by this deliberate but limited heuristic.
+Accept any valid calendar date on or before `date.today()` from the application's runtime clock. There is no minimum-age rule or fixed birth-year cutoff, so children's birth dates are supported. Reject invalid dates, future dates, and values with trailing prose or time components. Timestamp-valued DOBs are not currently supported.
+
+A standalone date cannot establish its business meaning. A valid date in `notes` is therefore a DOB candidate, while known transaction names provide limited negative context. This favors finding dates under misleading names but can classify unrelated dates under unrecognized names as DOB. A real birth date stored in an explicitly excluded transaction column can be missed. The `DOB` output is a heuristic classification, not proof of birth-date semantics or identity. DOB masking redacts the entire matched value.
 
 ### FULL_NAME
 

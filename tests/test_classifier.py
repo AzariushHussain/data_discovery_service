@@ -250,13 +250,15 @@ def test_email_domains_cannot_expose_other_identifiers_in_evidence():
 
 
 @pytest.mark.parametrize(
-    "primary",
-    ["a@example.com", "9876543210", "ABCPK1234F", "Aarav Sharma",
-     "Flat 18, Maple Road, Sector 7, Pune", "1992-04-15", "560103"],
+    "primary,column_name",
+    [("a@example.com", "full_name"), ("9876543210", "full_name"),
+     ("ABCPK1234F", "full_name"), ("Aarav Sharma", "full_name"),
+     ("Flat 18, Maple Road, Sector 7, Pune", "full_name"),
+     ("1992-04-15", "date_of_birth"), ("560103", "full_name")],
 )
-def test_mixed_prose_is_not_exposed_under_any_primary_mask(primary):
+def test_mixed_prose_is_not_exposed_under_any_primary_mask(primary, column_name):
     prose = "Aarav Sharma lives at Flat 18, Maple Road. PAN ABCPK1234F; email c@example.com"
-    result = PIIClassifier.classify_column("full_name", "text", [primary, primary, prose])
+    result = PIIClassifier.classify_column(column_name, "text", [primary, primary, prose])
     assert result["inferred_pii_type"] != "NONE"
     assert result["masked_evidence"][2] == "[MIXED_CONTENT_REDACTED]"
 
@@ -296,3 +298,55 @@ def test_standalone_hits_below_primary_threshold_still_set_risk(value, expected_
 def test_junk_only_column_has_no_risk():
     result = PIIClassifier.classify_column("notes", "text", ["N/A", "???"])
     assert result["risk_level"] == "NONE"
+
+
+@pytest.mark.parametrize("value", ["2020-01-15", "15-01-2020", "15/01/2020", "2020/01/15"])
+def test_child_birth_dates_are_classified_and_fully_masked(value):
+    result = PIIClassifier.classify_column("date_of_birth", "DATE", [value])
+    assert result["inferred_pii_type"] == "DOB"
+    assert result["risk_level"] == "HIGH"
+    assert result["masked_evidence"] == ["****-**-**"]
+
+
+@pytest.mark.parametrize("column_name", [
+    "dob", "DOB", "date_of_birth", "birth_date", "birthdate", "birthday",
+    "customer_dob", "customerDOB", "dateOfBirth", "dateofbirth",
+])
+def test_birth_context_supports_common_column_names(column_name):
+    result = PIIClassifier.classify_column(column_name, "TEXT", ["2000-02-29"])
+    assert result["inferred_pii_type"] == "DOB"
+
+
+@pytest.mark.parametrize("column_name", ["order_date", "created_at", "last_updated", "payment_date", "invoiceDate"])
+def test_known_transaction_dates_are_not_dob(column_name):
+    result = PIIClassifier.classify_column(column_name, "DATE", ["2000-01-01"])
+    assert result["inferred_pii_type"] == "NONE"
+    assert result["risk_level"] == "NONE"
+    assert result["masked_evidence"] == ["[UNCLASSIFIED_REDACTED]"]
+
+
+@pytest.mark.parametrize("column_name", ["notes", "field_1", "col_x"])
+@pytest.mark.parametrize("data_type", ["TEXT", "DATE"])
+def test_dob_candidates_do_not_require_a_birth_column_name(column_name, data_type):
+    result = PIIClassifier.classify_column(column_name, data_type, ["2020-01-15"])
+    assert result["inferred_pii_type"] == "DOB"
+    assert result["risk_level"] == "HIGH"
+    assert result["masked_evidence"] == ["****-**-**"]
+
+
+@pytest.mark.parametrize("value", [
+    "2000-01-01 arbitrary trailing text", "2000-01-01 12:00:00", "2000-01-01T00:00:00Z",
+    "Please verify 2000-01-01", "2023-02-29", "2020-13-01", "N/A", "9999-01-01",
+])
+def test_birth_hint_does_not_override_invalid_or_nonstandalone_dates(value):
+    result = PIIClassifier.classify_column("dob", "TEXT", [value])
+    assert result["inferred_pii_type"] == "NONE"
+    assert "DOB" not in result["justification"]
+
+
+def test_birth_date_today_is_valid_but_tomorrow_is_not():
+    from datetime import date, timedelta
+
+    today = date.today()
+    assert PIIClassifier._is_valid_dob(today.isoformat(), "dob")
+    assert not PIIClassifier._is_valid_dob((today + timedelta(days=1)).isoformat(), "dob")
