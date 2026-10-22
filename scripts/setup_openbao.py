@@ -161,6 +161,9 @@ def setup():
     write_token(auth["client_token"])
     print("Restricted application token written. Starting the app with its updated file mount.")
     compose("up", "-d", "--build", "--force-recreate", "app")
+    compose("exec", "-T", "sample_source_db", "psql", "-U", "customer_ro", "-d", "ecommerce_prod",
+            "-v", "ON_ERROR_STOP=1", "--single-transaction",
+            "-f", "/docker-entrypoint-initdb.d/02_readonly_role.sql")
     print("Setup complete. API: http://localhost:8000/docs")
     print("Rerun this command after OpenBao restarts or before the 24-hour app token expires.")
 

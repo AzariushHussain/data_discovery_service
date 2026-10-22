@@ -27,6 +27,7 @@ services:
       - "5434:5432"
     volumes:
       - ./seed/01_init_source.sql:/docker-entrypoint-initdb.d/01_init_source.sql:ro
+      - ./seed/02_readonly_role.sql:/docker-entrypoint-initdb.d/02_readonly_role.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U customer_ro -d ecommerce_prod"]
       interval: 3s

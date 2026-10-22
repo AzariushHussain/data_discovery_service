@@ -48,6 +48,11 @@ def test_fresh_setup_initializes_once_and_saves_private_files(environment, monke
     assert [c.args[2] for c in request.call_args_list].count("sys/init") == 2
     assert "PRIVATE_" not in capsys.readouterr().out
     environment.assert_any_call("up", "-d", "--build", "--force-recreate", "app")
+    environment.assert_any_call(
+        "exec", "-T", "sample_source_db", "psql", "-U", "customer_ro", "-d", "ecommerce_prod",
+        "-v", "ON_ERROR_STOP=1", "--single-transaction",
+        "-f", "/docker-entrypoint-initdb.d/02_readonly_role.sql",
+    )
 
 
 def test_existing_sealed_vault_prompts_without_reinitializing(environment, monkeypatch):

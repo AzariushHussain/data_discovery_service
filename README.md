@@ -72,7 +72,7 @@ From a WSL/Linux/macOS Bash terminal, run:
 bash scripts/setup-openbao.sh
 ```
 
-Requires Docker Compose v2 and host `python3` (3.9+); no host Python packages or `jq` are needed. The helper prepares the data-volume permissions, starts OpenBao, waits for its active node, initializes only a new vault, configures the `discovery` KV v2 mount and restricted policy, writes a 24-hour application token directly to `.secrets/openbao-token.txt`, then builds/recreates the API and starts its database dependencies. Migrations run during app startup.
+Requires Docker Compose v2 and host `python3` (3.9+); no host Python packages or `jq` are needed. The helper prepares the data-volume permissions, starts OpenBao, waits for its active node, initializes only a new vault, configures the `discovery` KV v2 mount and restricted policy, writes a 24-hour application token directly to `.secrets/openbao-token.txt`, then builds/recreates the API, starts its database dependencies, and applies the demo reader grants. Migrations run during app startup.
 
 For an existing vault, enter your saved unseal key when prompted (only if sealed), then your administrator/root token. Input is hidden; the helper refuses to fall back to echoed input without a private terminal. Multiple required unseal shares can be entered in sequence. Credentials are sent to the local published OpenBao port without proxying or redirects; they are not placed in command arguments or printed.
 
@@ -228,6 +228,32 @@ Startup runs `alembic upgrade head` before Uvicorn. The health endpoint is a liv
 
 </details>
 
+## Sample source read-only account
+
+`seed/02_readonly_role.sql` creates `discovery_reader` with the public demo password `discovery_reader_password`. New sample volumes run it after the table seed. The OpenBao setup helper also applies it with `ON_ERROR_STOP` and a single transaction after starting the databases, so existing demo volumes receive the account without reseeding tables or deleting data.
+
+To apply only these grants to an existing sample database:
+
+```bash
+docker compose up -d sample_source_db
+docker compose exec -T sample_source_db \
+  psql -U customer_ro -d ecommerce_prod -v ON_ERROR_STOP=1 \
+  --single-transaction -f /docker-entrypoint-initdb.d/02_readonly_role.sql
+```
+
+The reader has CONNECT to `ecommerce_prod`, USAGE on `public`, and SELECT on its tables. It has no administrative role attributes, role memberships, sequence-write grants, or table write/create privileges. The demo SQL removes PUBLIC table-write, schema-create, and database-create/temporary privileges in this dedicated database. Its default transaction mode is also read-only. Future public tables created by the seed owner `customer_ro` receive SELECT for the reader; tables created by other owners or in other schemas need explicit grants. Existing reader passwords are not reset on reruns. Obvious conflicts with an existing privileged/owning role cause setup to stop for manual inspection.
+
+The bootstrap administrator is retained for provisioning compatibility. Existing registered sources keep their original credentials in OpenBao; this change does not silently rewrite them. Register the demo using the reader DSN below to exercise database-enforced read-only access. These grants target the dedicated seeded demonstration database, not arbitrary customer databases or a general database-hardening policy. Provision real customer accounts separately with only the required access.
+
+Verify scanning and permission denial against the seeded demo reader:
+
+```bash
+docker compose exec -T app sh -c \
+  'TEST_SOURCE_DATABASE_URL="postgresql+psycopg://discovery_reader:discovery_reader_password@sample_source_db:5432/ecommerce_prod" pytest -q tests/test_source_permissions.py'
+```
+
+The tests discover/classify the seeded columns, check role/table privileges, and confirm writes fail with SQLSTATE `42501` even after disabling the read-only connection default. Write probes insert/update/delete zero rows; a unique table-creation probe is rolled back if unexpectedly permitted. Run these checks only against a disposable/local demo source.
+
 ## Use all five endpoints
 
 The example password below is the committed local demo credential. Use the Docker service hostname and internal port when registering a source: the API runs inside Docker, so `localhost` would refer to the API container itself.
@@ -239,7 +265,7 @@ curl -fsS -X POST http://localhost:8000/sources \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "Sample Customer DB",
-    "dsn": "postgresql+psycopg://customer_ro:customer_password@sample_source_db:5432/ecommerce_prod"
+    "dsn": "postgresql+psycopg://discovery_reader:discovery_reader_password@sample_source_db:5432/ecommerce_prod"
   }'
 ```
 
@@ -372,7 +398,7 @@ The highest applicable tier across all validated standalone and embedded types w
 - Raw sampled values are not persisted in inventory. Standalone samples are masked by their own matched type, rather than blindly using the column's primary type.
 - Ambiguous prose in a primary-PII column becomes `[MIXED_CONTENT_REDACTED]`. In embedded-only columns, each sample becomes a summary such as `[FREE_TEXT_REDACTED: EMAIL, PHONE_IN]`, listing only that sample's validated embedded types. Samples without a validated standalone or embedded match become `[UNCLASSIFIED_REDACTED]`. No surrounding prose is retained, so unsupported names, addresses, DOBs, or other secrets in that prose cannot leak through new evidence. The scanner still detects only four embedded types; redaction does not add detection coverage. Rebuild and rescan to replace old inventory evidence; existing logs and backups are not rewritten.
 - Application classification logs contain column names and sample counts, not raw samples. Target exception details are suppressed in scan/connection responses. HTTP access logs and metadata remain visible; this is not a general-purpose log scrubber.
-- Test passwords in Compose are public local-demo values. `customer_ro` is created as `POSTGRES_USER`, which makes it a bootstrap superuser despite the name. The connector requests read-only transactions, but this is not equivalent to database-enforced least privilege. Use a separately provisioned SELECT-only account for a real target.
+- Demo passwords in Compose and the role-provisioning SQL are public test values. Register the sample source using `discovery_reader`, a dedicated non-superuser account with schema usage and table SELECT privileges. The historical `customer_ro` bootstrap account remains an administrator for initialization/grants; do not use it for new scanner registrations. The connector also requests read-only transactions, but the reader's source-write denial is enforced by PostgreSQL privileges even when that setting is disabled.
 - If OpenBao accepts a secret write and source persistence subsequently fails, an unreferenced secret can remain. Automatic orphan cleanup and distributed atomicity are not implemented.
 
 The setup helper keeps entered administrator credentials in memory for its run; initial recovery credentials are saved once as described above. The optional manual CLI login caches credentials inside the OpenBao container. Keep administrative credentials secure and separate from the app token. No application auth was added: the OpenBao token authenticates the app to its credential store, not clients to FastAPI.
@@ -451,7 +477,7 @@ For pgAdmin running on the host:
 | Database | Host | Port | Database name | Username | Demo password |
 | --- | --- | --- | --- | --- | --- |
 | Service | `127.0.0.1` | 5433 | `discovery_metadata` | `discovery_user` | `discovery_password` |
-| Sample | `127.0.0.1` | 5434 | `ecommerce_prod` | `customer_ro` | `customer_password` |
+| Sample (reader) | `127.0.0.1` | 5434 | `ecommerce_prod` | `discovery_reader` | `discovery_reader_password` |
 
 These host ports differ from the internal `5432` used between containers. If Windows has a separate PostgreSQL instance on the same host port, use a free published port or, where reachable, the WSL address from `wsl hostname -I`. WSL addresses can change after restart. For pgAdmin on the same Docker network, use service hostnames and port 5432 instead.
 

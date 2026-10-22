@@ -14,7 +14,7 @@ class SourceCreateRequest(BaseModel):
         min_length=10,
         description="PostgreSQL connection string (e.g. postgresql+psycopg://user:pass@host:5432/dbname)",
         examples=[
-            "postgresql+psycopg://customer_ro:customer_password@sample_source_db:5432/ecommerce_prod"
+            "postgresql+psycopg://discovery_reader:discovery_reader_password@sample_source_db:5432/ecommerce_prod"
         ],
     )
 
