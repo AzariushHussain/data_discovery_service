@@ -13,9 +13,9 @@ The assignment allows at most two bonus tasks. Both selected tasks are implement
 | Assignment bonus | Implementation | How to verify |
 | --- | --- | --- |
 | Detect personal data hiding in free-text columns and report it separately from the column's main classification | Detects embedded email addresses, Indian phone numbers, PAN, and Aadhaar. Inventory reports `embedded_pii_types`, `embedded_match_ratio`, and `embedded_confidence` separately from the primary classification. Free-text evidence replaces the entire prose value with the detected types, preserving no surrounding text. | Scan the seeded source and inspect `support_tickets.ticket_body` in the inventory. Its primary type can be `NONE` while embedded types are reported. See [RULES.md](RULES.md) for format and masking limits. |
-| Re-scan behaviour that updates existing findings instead of duplicating them | A unique key on `(source_id, schema_name, table_name, column_name)` and PostgreSQL upserts update existing findings. Row IDs remain stable while classifications, risk, masked evidence, and timestamps refresh. | Scan the same unchanged source twice, then compare stored and unique column counts using the commands under **Verify rescans and inspect storage**. Both remain 26 for the supplied seed. |
+| Re-scan behaviour that updates existing findings instead of duplicating them | A unique key on `(source_id, schema_name, table_name, column_name)` and PostgreSQL upserts update existing findings. Unchanged columns retain row IDs while findings refresh. Successful scans also remove findings absent from the discovered column set; overlapping scans of one source return 409. | Scan the same unchanged source twice, then compare stored and unique column counts using the commands under **Verify rescans and inspect storage**. Both remain 26 for the supplied seed. |
 
-Embedded and primary PII column counts can overlap; they are not separate counts of distinct sensitive columns. Rescans update discovered columns but do not automatically delete findings for columns removed from the source.
+Embedded and primary PII column counts can overlap; they are not separate counts of distinct sensitive columns. Successful rescans reconcile the visible discovered column set, including removal of findings for missing columns. Failed scans preserve the prior inventory; overlapping scans of the same source return HTTP 409.
 
 ## Requirements
 
@@ -343,6 +343,7 @@ curl -fsS "http://localhost:8000/columns/$COLUMN_ID"
 | --- | --- |
 | 400 | Invalid source DSN or failed registration connection check |
 | 404 | Source or finding does not exist |
+| 409 | Another scan holds this source's database row lock; retry after it finishes |
 | 422 | Request validation fails; returns error types, field locations, and safe messages without submitted values or validation context |
 | 502 | Registered source connection, metadata discovery, or sampling failed |
 | 503 | OpenBao credentials are unavailable, rejected, or unreadable |
@@ -420,7 +421,7 @@ docker compose exec -T app sh -c \
   'TEST_DATABASE_URL="$DATABASE_URL" pytest -q'
 ```
 
-Integration tests create uniquely named temporary schemas in the selected PostgreSQL database and remove them afterward. They require schema-creation privileges and verify that partial upserts and timestamps roll back on connection, discovery, sampling, classification, secret retrieval, and commit failures. They do not modify existing source rows. The selected database must be PostgreSQL, not SQLite.
+Integration tests create uniquely named temporary schemas in the selected PostgreSQL database and remove them afterward. They require schema-creation privileges and verify that partial upserts and timestamps roll back on connection, discovery, sampling, classification, secret retrieval, and commit failures. They also cover stale-finding cleanup, renames, empty discovery, source isolation, and overlapping scan rejection. They do not modify existing source rows. The selected database must be PostgreSQL, not SQLite.
 
 To run tests before the app server is started, after building its image:
 
@@ -461,7 +462,9 @@ docker compose exec service_db \
       FROM column_inventory WHERE source_id = $SOURCE_ID;"
 ```
 
-For the unchanged seed, both counts remain 26. The unique constraint on `(source_id, schema_name, table_name, column_name)` supports PostgreSQL upserts. Row IDs stay stable; update timestamps advance. Previously recorded columns that have since been dropped or renamed in the target are not automatically deleted, so the stored inventory is not a fully reconciled current snapshot after schema changes.
+For the unchanged seed, both counts remain 26. The unique constraint on `(source_id, schema_name, table_name, column_name)` supports PostgreSQL upserts, preserving IDs for unchanged column identities. After every discovered column is successfully sampled/classified, stale findings for that source are deleted in the same transaction as the upserts and scan timestamp. A rename is treated as removing the old identity and adding a new one; the old `/columns/{id}` endpoint returns 404 after a successful rescan. Successful zero-column discovery clears that source's inventory. Sampling, classification, cleanup, or commit failures roll everything back, retaining the previous findings and timestamp.
+
+Scans take a PostgreSQL `FOR UPDATE NOWAIT` lock on the source row before reading credentials or the target. An overlapping scan of that source returns 409 immediately; different source rows can scan concurrently. Commit/rollback releases the lock. Reconciliation reflects only the schema visible to the source account during that run, not a cross-table source snapshot: changing permissions can hide findings without physically dropping columns. Cleanup affects only the service inventory, never the customer database. No scan history is retained.
 
 ```bash
 docker compose exec service_db \
@@ -585,7 +588,7 @@ For this assignment's small seed, synchronous table-level sampling keeps the imp
 - No verification against government registries, postal databases, email deliverability, or phone ownership. Format matches and checksums are evidence, not proof of issuance or identity.
 - No exhaustive multilingual name/address recognition. The vocabulary and heuristics can produce false positives and false negatives, especially generic columns, lowercase names, unfamiliar names, or non-English address text.
 - No grouped/spaced Aadhaar support, unrestricted phone-format normalization, or embedded name/address/DOB recognition. See exact supported formats in `RULES.md`.
-- No calibrated confidence model, complete row counts of PII, full-table PII sweep, inventory pagination, scan history, or automatic removal of stale inventory columns.
+- No calibrated confidence model, complete row counts of PII, full-table PII sweep, inventory pagination, or scan history. Successful scans reconcile current findings rather than preserving removed columns as history.
 - The setup helper combines initialization, operator-prompted unsealing, policy configuration, and app-token replacement into one command. There is no automatic AppRole/Agent lifecycle, unattended unsealing, secret orphan cleanup, or distributed transaction between OpenBao and PostgreSQL.
 - Historical database files, WAL, logs, and backups may retain data written before a masking or credential-storage fix. A rescan replaces current findings but does not erase historical copies.
 - Compose is a local demonstration, with plaintext demo passwords, HTTP OpenBao, exposed database ports, and unpinned dependencies. It is not ready to expose to untrusted networks.

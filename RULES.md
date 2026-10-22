@@ -331,8 +331,10 @@ Inline masking is limited by supported formats and detected types. It does not i
 
 - Each finding is unique by `(source_id, schema_name, table_name, column_name)`.
 - PostgreSQL `ON CONFLICT DO UPDATE` updates classifications, scores, risk, evidence, sampling statistics, justification, and `updated_at` without changing the existing row ID.
-- All findings from one scan and the source's `last_scanned_at` commit together. Exceptions during connection, discovery, sampling, classification, or persistence roll back the pending service-database transaction. This is not a source-data snapshot transaction.
-- Previous inventory remains available after a failed scan. Columns removed from the target are not automatically removed from old inventory.
+- Upserts, stale-finding deletions, and the source's `last_scanned_at` commit together. Exceptions during connection, discovery, sampling, classification, or persistence roll back the pending service-database transaction. This is not a source-data snapshot transaction.
+- Only after complete discovery/sampling/classification succeeds, delete this source's inventory rows whose IDs were not returned by the run's upserts. Unchanged column identities keep their IDs; renamed identities get new IDs and the old ones are removed. An empty discovered set clears only this source's findings. A failure, including cleanup or commit failure, rolls back deletions and upserts so previous inventory and timestamps remain intact.
+- Lock the source row using PostgreSQL `FOR UPDATE NOWAIT` before reading its credentials or target. PostgreSQL lock-not-available (`55P03`) becomes HTTP 409. Different sources can scan concurrently; commit/rollback releases the lock. This prevents overlapping runs from deleting or overwriting each other's inventory.
+- Cleanup concerns only service-database findings, not source tables or data. The reconciled set is the schema visible to the source account during discovery. Changes in permissions can hide columns without a physical drop, and different source tables are not read under one shared snapshot. Removed findings are not retained as history.
 - `total_columns_scanned` counts columns discovered on that run.
 - `pii_columns_detected` counts columns whose primary type is not `NONE`.
 - `embedded_pii_columns_detected` counts columns with a nonempty embedded type list. It can overlap with the primary count.
@@ -344,7 +346,7 @@ Inline masking is limited by supported formats and detected types. It does not i
 - Request validation failures return HTTP 422 with only error types, field locations, and fixed safe messages. Submitted input, validation context, and original validator messages are omitted so malformed registration requests cannot echo DSN credentials.
 - Connection errors become sanitized `ConnectionError` messages.
 - Metadata and sampling SQLAlchemy failures become sanitized `SourceScanError` messages; partially collected metadata or sample values are not returned as successful results.
-- The scan API returns 502 for target connection/discovery/sampling failures, 503 for credential-store HTTP failures, and 500 for unexpected classification/persistence failures. Error responses omit underlying SQL, DSNs, and driver messages.
+- The scan API returns 409 for an overlapping scan of the same source, 502 for target connection/discovery/sampling failures, 503 for credential-store HTTP failures, and 500 for unexpected classification/persistence failures. Error responses omit underlying SQL, DSNs, and driver messages.
 - On failure, roll back the service session. Dispose of the target engine in `finally` after successful or failed scans.
 - Classification logs use column name and sample count. They do not print sample contents.
 - The application has no general redaction middleware for arbitrary future log statements or HTTP request bodies. Keep raw DSNs, tokens, and sample values out of any added logging.

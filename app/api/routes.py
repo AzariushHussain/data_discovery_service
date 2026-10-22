@@ -1,11 +1,11 @@
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 from uuid import uuid4
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from app.services.secret_store import SecretStore, SecretStoreError
 
 from app.api.schemas import (
@@ -131,15 +131,12 @@ def list_sources(db: Session = Depends(get_db)) -> list[SourceResponse]:
     summary="Run schema discovery and PII classification on a registered source",
 )
 def scan_source(source_id: int, db: Session = Depends(get_db)) -> ScanSummaryResponse:
-    source = db.get(Source, source_id)
-    if not source:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Source {source_id} not found.",
-        )
-
     connector = None
     try:
+        # Hold one source row until commit/rollback so overlapping scans cannot reconcile stale data.
+        source = db.scalar(select(Source).where(Source.id == source_id).with_for_update(nowait=True))
+        if source is None:
+            raise HTTPException(status_code=404, detail=f"Source {source_id} not found.")
         dsn = _get_source_dsn(source)
         connector = TargetDBConnector(dsn)
         connector.verify_connection()
@@ -149,6 +146,7 @@ def scan_source(source_id: int, db: Session = Depends(get_db)) -> ScanSummaryRes
         pii_columns_detected = 0
         embedded_pii_columns_detected = 0
         now_utc = datetime.now(timezone.utc)
+        current_ids = []
 
         tables = {}
         for col_meta in discovered_columns:
@@ -221,8 +219,12 @@ def scan_source(source_id: int, db: Session = Depends(get_db)) -> ScanSummaryRes
                         "updated_at": stmt.excluded.updated_at,
                     },
                 )
-                db.execute(stmt)
+                current_ids.append(db.execute(stmt.returning(ColumnInventory.id)).scalar_one())
 
+        cleanup = delete(ColumnInventory).where(ColumnInventory.source_id == source.id)
+        if current_ids:
+            cleanup = cleanup.where(ColumnInventory.id.not_in(current_ids))
+        db.execute(cleanup)
         source.last_scanned_at = now_utc
         db.commit()
 
@@ -237,6 +239,15 @@ def scan_source(source_id: int, db: Session = Depends(get_db)) -> ScanSummaryRes
     except HTTPException:
         db.rollback()
         raise
+    except OperationalError as exc:
+        db.rollback()
+        if getattr(exc.orig, "sqlstate", None) == "55P03":
+            raise HTTPException(
+                status_code=409, detail=f"Source {source_id} is already being scanned. Retry after it finishes."
+            ) from None
+        raise HTTPException(
+            status_code=500, detail=f"Scan failed for source {source_id}. Scan results were not saved."
+        ) from None
     except SourceScanError as exc:
         db.rollback()
         raise HTTPException(

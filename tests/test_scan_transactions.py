@@ -43,7 +43,7 @@ def scan_database():
             db.add(source)
             db.flush()
             db.add(ColumnInventory(
-                id=1, source_id=1, schema_name="public", table_name="customers",
+                source_id=1, schema_name="public", table_name="customers",
                 column_name="email_address", data_type="TEXT", inferred_pii_type="NONE",
                 risk_level="NONE", justification="Previous completed scan", updated_at=PREVIOUS_SCAN,
             ))
@@ -177,3 +177,106 @@ def test_real_table_sampling_bounds_rows_and_counts_only_sampled_nulls(scan_data
         "empty_col": {"samples": [], "sample_size": 0, "null_count": 3},
         "phone": {"samples": ["9876543210"] * 3, "sample_size": 3, "null_count": 0},
     }
+
+
+def add_stale_and_other_source(sessions):
+    with sessions.begin() as db:
+        db.add(Source(id=2, name="Other source", secret_path="sources/other"))
+        db.flush()
+        db.add_all([
+            ColumnInventory(source_id=1, schema_name="public", table_name="retired_table",
+                            column_name="old_phone", data_type="TEXT", updated_at=PREVIOUS_SCAN),
+            ColumnInventory(source_id=2, schema_name="public", table_name="retired_table",
+                            column_name="old_phone", data_type="TEXT", updated_at=PREVIOUS_SCAN),
+        ])
+
+
+def test_successful_rescan_removes_stale_rows_only_for_scanned_source(monkeypatch, scan_database):
+    add_stale_and_other_source(scan_database)
+    target, database = configure_scan(monkeypatch, scan_database, None)
+    app.dependency_overrides[get_db] = database
+    try:
+        with TestClient(app) as client:
+            response = client.post("/sources/1/scan")
+        assert response.status_code == 200
+        with scan_database() as db:
+            current = db.scalars(select(ColumnInventory).where(ColumnInventory.source_id == 1)).all()
+            assert {row.column_name for row in current} == {"email_address", "new_phone"}
+            assert next(row.id for row in current if row.column_name == "email_address") == 1
+            other = db.scalars(select(ColumnInventory).where(ColumnInventory.source_id == 2)).all()
+            assert len(other) == 1 and other[0].column_name == "old_phone"
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_renamed_column_is_new_finding_and_old_id_is_removed(monkeypatch, scan_database):
+    target, database = configure_scan(monkeypatch, scan_database, None)
+    target.discover_schema.return_value = [
+        {"schema_name": "public", "table_name": "customers", "column_name": "contact_email", "data_type": "TEXT"},
+    ]
+    app.dependency_overrides[get_db] = database
+    try:
+        with TestClient(app) as client:
+            assert client.post("/sources/1/scan").status_code == 200
+            assert client.get("/columns/1").status_code == 404
+        with scan_database() as db:
+            rows = db.scalars(select(ColumnInventory)).all()
+            assert len(rows) == 1
+            assert rows[0].column_name == "contact_email" and rows[0].id != 1
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_successful_empty_discovery_clears_only_that_source_inventory(monkeypatch, scan_database):
+    add_stale_and_other_source(scan_database)
+    target, database = configure_scan(monkeypatch, scan_database, None)
+    target.discover_schema.return_value = []
+    app.dependency_overrides[get_db] = database
+    try:
+        with TestClient(app) as client:
+            response = client.post("/sources/1/scan")
+        assert response.status_code == 200
+        assert response.json()["total_columns_scanned"] == 0
+        target.sample_table_values.assert_not_called()
+        with scan_database() as db:
+            assert db.scalars(select(ColumnInventory).where(ColumnInventory.source_id == 1)).all() == []
+            assert len(db.scalars(select(ColumnInventory).where(ColumnInventory.source_id == 2)).all()) == 1
+            assert db.get(Source, 1).last_scanned_at > PREVIOUS_SCAN
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_commit_failure_restores_stale_rows_deleted_in_pending_scan(monkeypatch, scan_database):
+    add_stale_and_other_source(scan_database)
+    target, database = configure_scan(monkeypatch, scan_database, "commit")
+    app.dependency_overrides[get_db] = database
+    try:
+        with TestClient(app) as client:
+            response = client.post("/sources/1/scan")
+        assert response.status_code == 500
+        with scan_database() as db:
+            rows = db.scalars(select(ColumnInventory).where(ColumnInventory.source_id == 1)).all()
+            assert {row.column_name for row in rows} == {"email_address", "old_phone"}
+            assert all(row.updated_at == PREVIOUS_SCAN for row in rows)
+            assert db.get(Source, 1).last_scanned_at == PREVIOUS_SCAN
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_overlapping_scan_is_rejected_but_different_source_can_scan(monkeypatch, scan_database):
+    add_stale_and_other_source(scan_database)
+    target, database = configure_scan(monkeypatch, scan_database, None)
+    app.dependency_overrides[get_db] = database
+    try:
+        with scan_database() as active:
+            active.scalar(select(Source).where(Source.id == 1).with_for_update())
+            with TestClient(app) as client:
+                response = client.post("/sources/1/scan")
+                assert response.status_code == 409
+                target.verify_connection.assert_not_called()
+                assert client.post("/sources/2/scan").status_code == 200
+        with scan_database() as db:
+            assert db.get(Source, 1).last_scanned_at == PREVIOUS_SCAN
+            assert db.get(Source, 2).last_scanned_at > PREVIOUS_SCAN
+    finally:
+        app.dependency_overrides.pop(get_db, None)
