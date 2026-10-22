@@ -150,74 +150,78 @@ def scan_source(source_id: int, db: Session = Depends(get_db)) -> ScanSummaryRes
         embedded_pii_columns_detected = 0
         now_utc = datetime.now(timezone.utc)
 
+        tables = {}
         for col_meta in discovered_columns:
-            schema_name = col_meta["schema_name"]
-            table_name = col_meta["table_name"]
-            column_name = col_meta["column_name"]
-            data_type = col_meta["data_type"]
+            key = (col_meta["schema_name"], col_meta["table_name"])
+            tables.setdefault(key, []).append(col_meta)
 
-            sample_result = connector.sample_column_values(
+        for (schema_name, table_name), table_columns in tables.items():
+            table_samples = connector.sample_table_values(
                 schema_name=schema_name,
                 table_name=table_name,
-                column_name=column_name,
+                column_names=[col["column_name"] for col in table_columns],
                 limit=settings.SAMPLE_LIMIT,
             )
+            for col_meta in table_columns:
+                column_name = col_meta["column_name"]
+                data_type = col_meta["data_type"]
+                sample_result = table_samples[column_name]
 
-            classification = PIIClassifier.classify_column(
-                column_name=column_name,
-                data_type=data_type,
-                samples=sample_result["samples"],
-            )
+                classification = PIIClassifier.classify_column(
+                    column_name=column_name,
+                    data_type=data_type,
+                    samples=sample_result["samples"],
+                )
 
-            inferred_type = classification["inferred_pii_type"]
-            embedded_types = classification["embedded_pii_types"]
-            risk_level = classification["risk_level"]
+                inferred_type = classification["inferred_pii_type"]
+                embedded_types = classification["embedded_pii_types"]
+                risk_level = classification["risk_level"]
 
-            if inferred_type != "NONE":
-                pii_columns_detected += 1
-            if embedded_types:
-                embedded_pii_columns_detected += 1
-            risk_breakdown[risk_level] = risk_breakdown.get(risk_level, 0) + 1
+                if inferred_type != "NONE":
+                    pii_columns_detected += 1
+                if embedded_types:
+                    embedded_pii_columns_detected += 1
+                risk_breakdown[risk_level] = risk_breakdown.get(risk_level, 0) + 1
 
-            # Idempotent Upsert (updates existing findings on re-scan)
-            stmt = pg_insert(ColumnInventory).values(
-                source_id=source.id,
-                schema_name=schema_name,
-                table_name=table_name,
-                column_name=column_name,
-                data_type=data_type,
-                inferred_pii_type=inferred_type,
-                embedded_pii_types=embedded_types,
-                confidence=classification["confidence"],
-                match_ratio=classification["match_ratio"],
-                embedded_match_ratio=classification["embedded_match_ratio"],
-                embedded_confidence=classification["embedded_confidence"],
-                risk_level=risk_level,
-                sample_size=sample_result["sample_size"],
-                null_count=sample_result["null_count"],
-                masked_evidence=classification["masked_evidence"],
-                justification=classification["justification"],
-                updated_at=now_utc,
-            )
-            stmt = stmt.on_conflict_do_update(
-                constraint="uq_source_schema_table_column",
-                set_={
-                    "data_type": stmt.excluded.data_type,
-                    "inferred_pii_type": stmt.excluded.inferred_pii_type,
-                    "embedded_pii_types": stmt.excluded.embedded_pii_types,
-                    "confidence": stmt.excluded.confidence,
-                    "match_ratio": stmt.excluded.match_ratio,
-                    "embedded_match_ratio": stmt.excluded.embedded_match_ratio,
-                    "embedded_confidence": stmt.excluded.embedded_confidence,
-                    "risk_level": stmt.excluded.risk_level,
-                    "sample_size": stmt.excluded.sample_size,
-                    "null_count": stmt.excluded.null_count,
-                    "masked_evidence": stmt.excluded.masked_evidence,
-                    "justification": stmt.excluded.justification,
-                    "updated_at": stmt.excluded.updated_at,
-                },
-            )
-            db.execute(stmt)
+                # Idempotent Upsert (updates existing findings on re-scan)
+                stmt = pg_insert(ColumnInventory).values(
+                    source_id=source.id,
+                    schema_name=schema_name,
+                    table_name=table_name,
+                    column_name=column_name,
+                    data_type=data_type,
+                    inferred_pii_type=inferred_type,
+                    embedded_pii_types=embedded_types,
+                    confidence=classification["confidence"],
+                    match_ratio=classification["match_ratio"],
+                    embedded_match_ratio=classification["embedded_match_ratio"],
+                    embedded_confidence=classification["embedded_confidence"],
+                    risk_level=risk_level,
+                    sample_size=sample_result["sample_size"],
+                    null_count=sample_result["null_count"],
+                    masked_evidence=classification["masked_evidence"],
+                    justification=classification["justification"],
+                    updated_at=now_utc,
+                )
+                stmt = stmt.on_conflict_do_update(
+                    constraint="uq_source_schema_table_column",
+                    set_={
+                        "data_type": stmt.excluded.data_type,
+                        "inferred_pii_type": stmt.excluded.inferred_pii_type,
+                        "embedded_pii_types": stmt.excluded.embedded_pii_types,
+                        "confidence": stmt.excluded.confidence,
+                        "match_ratio": stmt.excluded.match_ratio,
+                        "embedded_match_ratio": stmt.excluded.embedded_match_ratio,
+                        "embedded_confidence": stmt.excluded.embedded_confidence,
+                        "risk_level": stmt.excluded.risk_level,
+                        "sample_size": stmt.excluded.sample_size,
+                        "null_count": stmt.excluded.null_count,
+                        "masked_evidence": stmt.excluded.masked_evidence,
+                        "justification": stmt.excluded.justification,
+                        "updated_at": stmt.excluded.updated_at,
+                    },
+                )
+                db.execute(stmt)
 
         source.last_scanned_at = now_utc
         db.commit()

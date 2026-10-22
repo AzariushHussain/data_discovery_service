@@ -7,7 +7,7 @@ from unittest.mock import Mock
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, event, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.schema import CreateSchema, CreateTable, DropSchema
@@ -17,6 +17,7 @@ from app.db.models import ColumnInventory, Source
 from app.db.session import get_db
 from app.main import app
 from app.services.connector import SourceScanError
+from app.services.connector import TargetDBConnector
 
 
 PREVIOUS_SCAN = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -59,7 +60,7 @@ def configure_scan(monkeypatch, sessions, failure):
     if failure in {"sample", "classify"}:
         columns.append("blocked")
     target.discover_schema.return_value = [
-        {"schema_name": "public", "table_name": "customers", "column_name": name, "data_type": "TEXT"}
+        {"schema_name": "public", "table_name": "blocked_table" if name == "blocked" else "customers", "column_name": name, "data_type": "TEXT"}
         for name in columns
     ]
     if failure == "connect":
@@ -68,10 +69,13 @@ def configure_scan(monkeypatch, sessions, failure):
         target.discover_schema.side_effect = SourceScanError("Target schema discovery failed.")
 
     def sample(**kwargs):
-        if failure == "sample" and kwargs["column_name"] == "blocked":
-            raise SourceScanError("Target column sampling failed.")
-        return {"samples": ["a@example.com"], "sample_size": 1, "null_count": 0}
-    target.sample_column_values.side_effect = sample
+        if failure == "sample" and "blocked" in kwargs["column_names"]:
+            raise SourceScanError("Target table sampling failed.")
+        return {
+            name: {"samples": ["a@example.com"], "sample_size": 1, "null_count": 0}
+            for name in kwargs["column_names"]
+        }
+    target.sample_table_values.side_effect = sample
     monkeypatch.setattr(routes, "TargetDBConnector", Mock(return_value=target))
 
     def source_dsn(source):
@@ -129,6 +133,10 @@ def test_successful_scan_commits_all_findings_and_timestamp(monkeypatch, scan_da
             response = client.post("/sources/1/scan")
         assert response.status_code == 200
         assert response.json()["total_columns_scanned"] == 2
+        target.sample_table_values.assert_called_once_with(
+            schema_name="public", table_name="customers",
+            column_names=["email_address", "new_phone"], limit=routes.settings.SAMPLE_LIMIT,
+        )
         with scan_database() as db:
             rows = db.scalars(select(ColumnInventory)).all()
             assert len(rows) == 2
@@ -138,3 +146,34 @@ def test_successful_scan_commits_all_findings_and_timestamp(monkeypatch, scan_da
         target.engine.dispose.assert_called_once()
     finally:
         app.dependency_overrides.pop(get_db, None)
+
+
+def test_real_table_sampling_bounds_rows_and_counts_only_sampled_nulls(scan_database):
+    with scan_database() as db:
+        engine = db.get_bind()
+    schema = engine.get_execution_options()["schema_translate_map"][None]
+    safe_schema = engine.dialect.identifier_preparer.quote_identifier(schema)
+    with engine.begin() as connection:
+        connection.execute(text(f'CREATE TABLE {safe_schema}.sample_values (empty_col TEXT, phone TEXT)'))
+        connection.execute(text(
+            f"INSERT INTO {safe_schema}.sample_values "
+            "SELECT NULL, '9876543210' FROM generate_series(1, 50)"
+        ))
+    statements = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        target = TargetDBConnector.__new__(TargetDBConnector)
+        target.engine = engine
+        result = target.sample_table_values(schema, "sample_values", ["empty_col", "phone"], limit=3)
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    assert len(statements) == 1
+    assert "COUNT" not in statements[0]
+    assert result == {
+        "empty_col": {"samples": [], "sample_size": 0, "null_count": 3},
+        "phone": {"samples": ["9876543210"] * 3, "sample_size": 3, "null_count": 0},
+    }

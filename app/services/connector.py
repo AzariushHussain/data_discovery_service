@@ -61,45 +61,34 @@ class TargetDBConnector:
 
         return column_inventory_metadata
 
-    def sample_column_values(
-        self, schema_name: str, table_name: str, column_name: str, limit: int = 200
-    ) -> dict[str, Any]:
-        """Samples up to `limit` non-null values from a specific table column securely."""
-        # Quote identifiers safely to prevent SQL injection vulnerabilities
+    def sample_table_values(
+        self, schema_name: str, table_name: str, column_names: list[str], limit: int = 200
+    ) -> dict[str, dict[str, Any]]:
+        """Read one bounded row sample; count nulls/blanks only within those rows."""
+        if limit <= 0 or not column_names:
+            raise ValueError("Sampling requires a positive limit and at least one column.")
         quote = self.engine.dialect.identifier_preparer.quote_identifier
         safe_schema = quote(schema_name)
         safe_table = quote(table_name)
-        safe_column = quote(column_name)
-
+        safe_columns = ", ".join(quote(name) for name in column_names)
         query = text(
-            f"SELECT {safe_column} FROM {safe_schema}.{safe_table} "
-            f"WHERE {safe_column} IS NOT NULL AND TRIM(CAST({safe_column} AS TEXT)) != '' "
-            f"LIMIT :limit"
+            f"SELECT {safe_columns} FROM {safe_schema}.{safe_table} LIMIT :limit"
         )
-
-        samples: list[str] = []
-        null_count = 0
-
+        sampled = {
+            name: {"samples": [], "sample_size": 0, "null_count": 0}
+            for name in column_names
+        }
         try:
             with self.engine.connect() as conn:
-                # Count total nulls first
-                null_query = text(
-                    f"SELECT COUNT(*) FROM {safe_schema}.{safe_table} "
-                    f"WHERE {safe_column} IS NULL OR TRIM(CAST({safe_column} AS TEXT)) = ''"
-                )
-                null_count = conn.execute(null_query).scalar() or 0
-
-                # Fetch bounded non-null samples
                 result = conn.execute(query, {"limit": limit})
                 for row in result:
-                    val = row[0]
-                    if val is not None:
-                        samples.append(str(val))
+                    for name, val in zip(column_names, row):
+                        if val is None or not str(val).strip():
+                            sampled[name]["null_count"] += 1
+                        else:
+                            sampled[name]["samples"].append(str(val))
         except SQLAlchemyError:
-            raise SourceScanError("Target column sampling failed.") from None
-
-        return {
-            "samples": samples,
-            "sample_size": len(samples),
-            "null_count": null_count,
-        }
+            raise SourceScanError("Target table sampling failed.") from None
+        for column in sampled.values():
+            column["sample_size"] = len(column["samples"])
+        return sampled

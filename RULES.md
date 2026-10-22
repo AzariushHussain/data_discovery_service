@@ -27,32 +27,24 @@ The secret-store and service-database writes are separate operations. If databas
 
 ## 3. Sampling
 
-For each column, identifiers are quoted with the PostgreSQL dialect's identifier preparer, including escaping embedded double quotes. The row limit is passed as a bound SQL parameter.
-
-The first query counts table-wide null or blank values:
+Group discovered columns by `(schema_name, table_name)`. For each table, quote every identifier with the PostgreSQL dialect's identifier preparer, including embedded double quotes, and run one sampling query with a bound row limit:
 
 ```sql
-SELECT COUNT(*) FROM "schema"."table"
-WHERE "column" IS NULL OR TRIM(CAST("column" AS TEXT)) = '';
-```
-
-The second query retrieves up to `SAMPLE_LIMIT` nonblank values:
-
-```sql
-SELECT "column" FROM "schema"."table"
-WHERE "column" IS NOT NULL
-  AND TRIM(CAST("column" AS TEXT)) != ''
+SELECT "column_a", "column_b", "column_c"
+FROM "schema"."table"
 LIMIT :limit;
 ```
 
-- Default sample limit: 200 per column.
-- Non-null returned values become Python strings. Classifier comparisons strip surrounding whitespace.
-- `sample_size` is the number of returned nonblank values, not total table rows.
-- `null_count` includes SQL nulls and blank/whitespace text across the entire table, not just the sample.
-- The sample is not randomized, ordered, or guaranteed stable. There is no sample-wide transaction snapshot across columns.
-- Returned row counts are bounded, but rows examined, text bytes returned, and total scan duration are not globally bounded. The count query can scan a whole table.
+- Default sample limit: 200 returned rows per table, including rows with nulls or blanks. Reject nonpositive limits and empty column lists before querying.
+- All columns in a table use the same returned rows from one statement. No full-table null count or search for additional nonblank values is performed.
+- For each column, SQL nulls and values whose Python string representation is blank after stripping whitespace increment `null_count`. Other values become Python strings for classification.
+- `sample_size` is the number of nonblank values for that column within the returned rows. `null_count` counts null/blank values within those same rows. Their sum is the table's returned row count, which may be less than the configured limit.
+- Empty tables produce zero samples and zero sampled nulls. An all-null sampled column has zero classification support; this is not proof that unsampled rows contain no PII.
+- The sample is not randomized, ordered, or guaranteed stable. Rows in one table share a statement snapshot, but there is no consistent source snapshot across different tables.
+- Returned rows are bounded. Returned bytes, physical database work, and total scan duration are not globally bounded. Per-statement timeouts remain in place, and there is no scan-wide deadline. A row limit is not a hard I/O budget.
 - Default target connection timeout: 5 seconds. Default target statement timeout: 5,000 milliseconds, separately per statement.
-- SQLAlchemy connection, permission, timeout, casting, or result-read errors propagate as sanitized failures; a partial iterator result is not converted to an empty success.
+- SQLAlchemy connection, permission, timeout, or result-read errors propagate as sanitized failures. A partially read table sample is never returned as a success; the scan rolls back its pending inventory writes.
+- Older inventory stored table-wide null/blank counts. Rescan existing sources before interpreting `null_count` using the new sampled-row semantics; historical entries are not automatically rewritten.
 
 The classifier receives the rendered datatype. Embedded scanning, standalone full-name detection, and standalone postal-address detection are enabled for `text`, `varchar`, `character varying`, `char`, and `character`, case-insensitively and ignoring a parenthesized length. Other scalar detectors are not restricted to text database types.
 

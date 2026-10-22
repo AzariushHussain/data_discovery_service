@@ -422,7 +422,7 @@ These host ports differ from the internal `5432` used between containers. If Win
 | Setting | Default in `Settings` | Compose value or behavior |
 | --- | --- | --- |
 | `DATABASE_URL` | Localhost service DB on 5433 | Host `service_db`, port 5432 |
-| `SAMPLE_LIMIT` | 200 | Up to 200 nonblank returned values per column |
+| `SAMPLE_LIMIT` | 200 | Up to 200 returned rows per table, including nulls/blanks; columns share those rows |
 | `CONNECT_TIMEOUT_SEC` | 5 | psycopg connection timeout |
 | `STATEMENT_TIMEOUT_MS` | 5000 | Target statement timeout, including null-count queries |
 | `OPENBAO_ADDR` | `http://127.0.0.1:8200` | `http://openbao:8200` inside Docker |
@@ -521,9 +521,13 @@ Do not rerun this against populated tables; the seed uses plain `CREATE TABLE` a
 
 ## Sampling trade-offs and scaling
 
-Returned samples are bounded, but database work is not strictly bounded. Each column runs a null/blank `COUNT(*)`, potentially reading the whole table, followed by a nonblank `LIMIT` query that can also examine many rows. Each statement has its own timeout. Queries have no `ORDER BY`, random sampling, or shared source snapshot; samples may be biased or change with execution plans and concurrent writes. `null_count` includes blanks and is table-wide, while `sample_size` counts only returned nonblank values; they are not a valid pair for estimating a table-wide null ratio.
+Sampling runs one `SELECT ... LIMIT :limit` query per table for all discovered columns together. It no longer runs per-column full-table null counts or searches beyond the selected rows for nonblank values. With the three-table, 26-column seed, sampling uses three queries rather than 52. Metadata discovery and connection checks use additional queries. All columns in a table share one returned row set; each column is still classified independently.
 
-For this assignment's small seed, synchronous per-column queries keep the implementation inspectable. For millions of rows and a hundred sources, I would batch samples per table, bound sampled bytes as well as row counts, use PostgreSQL statistics and explicitly designed random/block sampling, remove full-table null counts, introduce a scan-wide deadline, and add a small job queue with per-source concurrency limits. I would measure detector precision/recall on a labeled dataset before calibrating scores, rather than increasing scores by lowering the sample threshold.
+`sample_size` counts nonblank values and `null_count` counts null/blank values within those same sampled rows. Their sum is the returned table-row count, at most `SAMPLE_LIMIT` (default 200). Sparse columns may therefore yield few or zero usable values even when later rows contain PII. Previously stored `null_count` values were table-wide: rebuild and rescan existing sources to update their meaning.
+
+Sampling remains an unordered, nonrandom limited sample. It can be biased and can miss PII outside the returned rows; the sampled null fraction is not necessarily representative of the whole table. A table uses one statement snapshot, but different tables do not share a source snapshot. Each statement has its own timeout. Returned row counts are bounded; returned bytes, physical database work, and total scan duration are not globally bounded. There is no scan-wide deadline.
+
+For this assignment's small seed, synchronous table-level sampling keeps the implementation inspectable. For millions of rows and a hundred sources, I would bound sampled bytes as well as row counts, use PostgreSQL statistics and explicitly designed random/block sampling, introduce a scan-wide deadline, and add a small job queue with per-source concurrency limits. I would measure detector precision/recall on a labeled dataset before calibrating scores, rather than increasing scores by lowering the sample threshold.
 
 ## Deliberate exclusions and remaining limitations
 

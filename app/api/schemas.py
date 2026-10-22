@@ -50,8 +50,8 @@ class ColumnInventoryResponse(BaseModel):
         description="Embedded match ratio weighted by sample size; null until rescanned."
     )
     risk_level: str
-    sample_size: int
-    null_count: int
+    sample_size: int = Field(description="Nonblank values among the sampled table rows.")
+    null_count: int = Field(description="Null or blank values among sampled table rows, not the whole table.")
     masked_evidence: list[str]
     justification: str
     updated_at: datetime
