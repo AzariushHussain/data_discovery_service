@@ -25,7 +25,7 @@ Embedded and primary PII column counts can overlap; they are not separate counts
 | Docker Compose v2 | Commands use `docker compose`, not `docker-compose` |
 | Bash and curl | Run the examples from Linux, macOS, or a WSL Bash terminal on Windows |
 | Host ports | API: `8000`; service PostgreSQL: `5433`; sample PostgreSQL: `5434`; OpenBao: loopback `8200` |
-| Host Python | Optional; Docker supplies Python 3.12 and project dependencies |
+| Host Python | Python 3.9+ for the setup helper (standard library only); optional when using the manual setup reference. Docker supplies Python 3.12 for the API |
 | Local Python development | Requires Python 3.12 or newer, matching `pyproject.toml` |
 
 Run commands from the repository root. PowerShell users should run the Bash examples in WSL, particularly heredocs, input redirection, and hidden token prompts.
@@ -65,6 +65,30 @@ sample_source_db: demo source with customers, orders, support_tickets
 SQLAlchemy, FastAPI, Pydantic, psycopg, and httpx provide database, transport, validation, and HTTP support. PII classification is implemented in this repository; it does not wrap an external detection library or use a pretrained NLP model.
 
 ## First run from a clean checkout
+
+From a WSL/Linux/macOS Bash terminal, run:
+
+```bash
+bash scripts/setup-openbao.sh
+```
+
+Requires Docker Compose v2 and host `python3` (3.9+); no host Python packages or `jq` are needed. The helper prepares the data-volume permissions, starts OpenBao, waits for its active node, initializes only a new vault, configures the `discovery` KV v2 mount and restricted policy, writes a 24-hour application token directly to `.secrets/openbao-token.txt`, then builds/recreates the API and starts its database dependencies. Migrations run during app startup.
+
+For an existing vault, enter your saved unseal key when prompted (only if sealed), then your administrator/root token. Input is hidden; the helper refuses to fall back to echoed input without a private terminal. Multiple required unseal shares can be entered in sequence. Credentials are sent to the local published OpenBao port without proxying or redirects; they are not placed in command arguments or printed.
+
+For a new vault, generated initialization credentials are saved once to `.secrets/openbao-init.json` with private file permissions, and used in memory to finish that first setup. Back them up in a password manager outside the repository, then remove that local recovery copy. It contains the root token and unseal keys in plaintext. Both secret files are excluded from Git and Docker's build context; Git ignore does not prevent cloud-folder synchronization. Linux permissions on Windows-mounted files depend on the mount/NTFS configuration, so restrict host access as well. On later runs the helper prompts for administrative credentials instead of reading this recovery file automatically.
+
+Existing vaults and source secrets are preserved. An existing mount must already be KV v2; the helper stops rather than replacing an incompatible mount. It also refuses to overwrite a saved recovery file when the selected vault is uninitialized. This script is operator-triggered setup, not automatic unsealing or background token rotation. Each successful run creates a new restricted application token; older tokens remain valid until they expire or are administratively revoked.
+
+```bash
+docker compose ps
+curl --retry 20 --retry-connrefused --retry-delay 1 -fsS http://localhost:8000/health
+```
+
+Expected: `{"status":"ok"}`. The API health endpoint is a liveness check; it does not verify OpenBao readiness or source connectivity. OpenBao uses persistent Raft storage, with local HTTP and one unseal share for this demonstration. The helper does not reset storage, enable development mode, or cache administrator login in the container. See the official [initialization](https://openbao.org/docs/commands/operator/init/), [unsealing](https://openbao.org/docs/commands/operator/unseal/), and [token creation](https://openbao.org/docs/commands/token/create/) documentation.
+
+<details>
+<summary>Manual setup commands (optional reference)</summary>
 
 ### 1. Prepare the local secret file
 
@@ -201,6 +225,8 @@ Startup runs `alembic upgrade head` before Uvicorn. The health endpoint is a liv
 
 - Swagger UI: `http://localhost:8000/docs`
 - OpenAPI schema: `http://localhost:8000/openapi.json`
+
+</details>
 
 ## Use all five endpoints
 
@@ -349,7 +375,7 @@ The highest applicable tier across all validated standalone and embedded types w
 - Test passwords in Compose are public local-demo values. `customer_ro` is created as `POSTGRES_USER`, which makes it a bootstrap superuser despite the name. The connector requests read-only transactions, but this is not equivalent to database-enforced least privilege. Use a separately provisioned SELECT-only account for a real target.
 - If OpenBao accepts a secret write and source persistence subsequently fails, an unreferenced secret can remain. Automatic orphan cleanup and distributed atomicity are not implemented.
 
-The bootstrap root login is cached by the CLI inside the OpenBao container. Keep the separately saved root credential secure, and use administrator credentials only for setup/rotation. No application auth was added: the OpenBao token authenticates the app to its credential store, not clients to FastAPI.
+The setup helper keeps entered administrator credentials in memory for its run; initial recovery credentials are saved once as described above. The optional manual CLI login caches credentials inside the OpenBao container. Keep administrative credentials secure and separate from the app token. No application auth was added: the OpenBao token authenticates the app to its credential store, not clients to FastAPI.
 
 ## Tests
 
@@ -359,7 +385,7 @@ Run all default tests with one command after starting the app:
 docker compose exec app pytest -q
 ```
 
-The default suite includes classification, masking, logs without raw samples, misleading metadata, supported Unicode names, embedded ratios, permission/timeouts, and sanitized connector failures. Seven PostgreSQL transaction tests skip unless `TEST_DATABASE_URL` is provided.
+The default suite includes classification, masking, logs without raw samples, misleading metadata, supported Unicode names, embedded ratios, permission/timeouts, and sanitized connector failures. PostgreSQL integration tests skip unless `TEST_DATABASE_URL` is provided.
 
 Run the complete suite including rollback/commit integration tests:
 
@@ -389,6 +415,8 @@ pytest -q
 Actual source scanning and local Alembic commands additionally require reachable PostgreSQL/OpenBao services and suitable environment variables. The optional test database URL is independent of the app's default database URL.
 
 ### Verification performed
+
+The setup helper was verified against disposable OpenBao 2.7.1 and PostgreSQL containers on 2026-10-22. Checks covered fresh initialization, private credential files, restricted-token KV operations, restart/unseal with operator prompts, token-file replacement, preservation of existing secrets, and rejection of an invalid administrator token without replacing the working app token. The default suite passed **245 tests**; eight PostgreSQL integration tests were skipped in that run. Existing development vault data was not used or reset.
 
 On 2026-10-21, the setup was exercised in a separately named Compose project with fresh PostgreSQL and OpenBao volumes. Verification covered volume ownership, OpenBao initialization/unsealing, policy and restricted-token provisioning, image build, the complete migration chain, all five API endpoints, inventory filters, expected seed classifications, and duplicate-free rescans. The complete suite passed: **148 tests**, including all seven PostgreSQL transaction tests.
 
@@ -466,31 +494,17 @@ docker compose up -d --build app
 
 The last build includes the migration in future images. There is no application source-code bind mount: code edits require a rebuild, and generated files inside containers must be copied out before recreation. Model changes that remove columns must be coordinated with their migration; retain an appropriate previous image if the application cannot start while preparing the change. Avoid rewriting migrations already applied to shared environments.
 
-## Restart and manual token rotation
+## Restart and manual token replacement
 
-For an existing setup:
-
-```bash
-docker compose up -d
-docker compose exec openbao bao status
-```
-
-If sealed, unseal with the saved key, then verify health. Do not reinitialize a persistent initialized volume.
+Run the same helper after OpenBao restarts, or before the application token's 24-hour lifetime expires:
 
 ```bash
-docker compose exec openbao bao operator unseal
-curl -fsS http://localhost:8000/health
+bash scripts/setup-openbao.sh
 ```
 
-To replace an expiring application token:
+If the vault is sealed, it prompts privately for the saved unseal key. It always requests an administrator token for provisioning the replacement app token. Persistent Raft data is reused; an initialized vault is never initialized again. The helper atomically replaces the app token file and recreates the API so its Compose secret mount follows the new file. Application code is rebuilt as part of startup.
 
-1. Log in using the saved root token: `docker compose exec openbao bao login -no-print`.
-2. Run the restricted `bao token create` command from first-run setup again.
-3. Replace `.secrets/openbao-token.txt` using the hidden Bash prompt shown above.
-4. Run `docker compose up -d --force-recreate app` and verify a scan.
-5. If the old token is still valid, revoke it using its saved non-secret accessor with `bao token revoke -accessor <old-accessor>` inside the OpenBao container.
-
-The 24-hour explicit maximum prevents renewal beyond that lifetime. AppRole and OpenBao Agent renewal/reauthentication are not implemented. A token-file change needs no image rebuild; container recreation ensures the file mount follows replacements made by editors.
+The existing app token is left untouched if authentication/provisioning fails before the new token is written. If the later app build/start fails, fix that Docker error and rerun the helper; the newly written token remains available. Previously issued tokens are not revoked automatically and can remain valid until expiry. There is no background renewal, Agent, AppRole, or unattended unsealing. The manual commands above remain available for recovery or environments without host Python.
 
 ## Troubleshooting
 
@@ -498,7 +512,7 @@ The 24-hour explicit maximum prevents renewal beyond that lifetime. AppRole and 
 | --- | --- |
 | Compose reports an undefined volume | Declare it in the top-level `volumes` block |
 | Compose says `services.app` has an unexpected property | `openbao` belongs alongside `app`; service `secrets` belongs alongside `depends_on`, not inside it |
-| OpenBao cannot write `/bao/data/vault.db` | Stop OpenBao, repeat the ownership command, then start it |
+| OpenBao cannot write `/bao/data/vault.db` | Run the setup helper; it prepares ownership before starting OpenBao |
 | OpenBao connection refused | Check `docker compose ps -a openbao` and `docker compose logs --tail 50 openbao`; allow startup time |
 | OpenBao is sealed | Use `bao operator unseal`, not `operator init` |
 | Secret write/read returns 403 | Check token expiry, token-file contents, and `discovery-service` policy using the administrator login |
@@ -546,7 +560,7 @@ For this assignment's small seed, synchronous table-level sampling keeps the imp
 - No exhaustive multilingual name/address recognition. The vocabulary and heuristics can produce false positives and false negatives, especially generic columns, lowercase names, unfamiliar names, or non-English address text.
 - No grouped/spaced Aadhaar support, unrestricted phone-format normalization, or embedded name/address/DOB recognition. See exact supported formats in `RULES.md`.
 - No calibrated confidence model, complete row counts of PII, full-table PII sweep, inventory pagination, scan history, or automatic removal of stale inventory columns.
-- OpenBao requires manual initialization, unsealing, and token rotation; there is no automatic AppRole/Agent lifecycle, secret orphan cleanup, or distributed transaction between OpenBao and PostgreSQL.
+- The setup helper combines initialization, operator-prompted unsealing, policy configuration, and app-token replacement into one command. There is no automatic AppRole/Agent lifecycle, unattended unsealing, secret orphan cleanup, or distributed transaction between OpenBao and PostgreSQL.
 - Historical database files, WAL, logs, and backups may retain data written before a masking or credential-storage fix. A rescan replaces current findings but does not erase historical copies.
 - Compose is a local demonstration, with plaintext demo passwords, HTTP OpenBao, exposed database ports, and unpinned dependencies. It is not ready to expose to untrusted networks.
 

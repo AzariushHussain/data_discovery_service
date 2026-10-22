@@ -14,6 +14,8 @@ This document records the implemented rules in `connector.py`, `classifier.py`, 
 
 OpenBao writes use `{"data": {"dsn": "..."}}`; reads retrieve `response.data.data.dsn`. The application reads its restricted token from a mounted file. Neither the token nor a raw DSN is returned in source-list responses. The database schema has no source `dsn` or `masked_dsn` column.
 
+Local setup uses `bash scripts/setup-openbao.sh` (host Python standard library). It initializes only new vaults, prompts privately for existing unseal/admin credentials, validates or enables KV v2, applies the restricted policy, and writes a new nonrenewable 24-hour app token directly to the ignored token file. It recreates the API to refresh the file mount. Only new-vault initialization saves administrative recovery credentials to an ignored private file; later runs do not load that file automatically. The helper does not reset an existing vault, overwrite recovery data, or replace an incompatible mount. Old application tokens are not automatically revoked. Unsealing and token replacement remain operator-triggered; no Agent/AppRole or background lifecycle is implemented.
+
 The secret-store and service-database writes are separate operations. If database persistence fails after a successful secret write, an orphaned OpenBao secret can remain. The target's true privilege boundary must be provided by its database role; the demo bootstrap role is not actually a least-privilege reader.
 
 ## 2. Schema discovery
