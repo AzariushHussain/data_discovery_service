@@ -289,7 +289,7 @@ curl -fsS "http://localhost:8000/columns/$COLUMN_ID"
 | --- | --- |
 | 400 | Invalid source DSN or failed registration connection check |
 | 404 | Source or finding does not exist |
-| 422 | Request fails Pydantic validation |
+| 422 | Request validation fails; returns error types, field locations, and safe messages without submitted values or validation context |
 | 502 | Registered source connection, metadata discovery, or sampling failed |
 | 503 | OpenBao credentials are unavailable, rejected, or unreadable |
 | 500 | Internal classification or persistence failure |

@@ -334,6 +334,7 @@ Inline masking is limited by supported formats and detected types. It does not i
 
 ## 11. Errors and logging
 
+- Request validation failures return HTTP 422 with only error types, field locations, and fixed safe messages. Submitted input, validation context, and original validator messages are omitted so malformed registration requests cannot echo DSN credentials.
 - Connection errors become sanitized `ConnectionError` messages.
 - Metadata and sampling SQLAlchemy failures become sanitized `SourceScanError` messages; partially collected metadata or sample values are not returned as successful results.
 - The scan API returns 502 for target connection/discovery/sampling failures, 503 for credential-store HTTP failures, and 500 for unexpected classification/persistence failures. Error responses omit underlying SQL, DSNs, and driver messages.
