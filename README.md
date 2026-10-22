@@ -6,6 +6,17 @@ The service implements all five assignment endpoints and two bonuses: separate e
 
 See [RULES.md](RULES.md) for the exact discovery, classification, confidence, risk, and masking rules. That file describes the implementation, including its limitations; it is not a claim of complete PII coverage.
 
+## Completed bonus tasks
+
+The assignment allows at most two bonus tasks. Both selected tasks are implemented:
+
+| Assignment bonus | Implementation | How to verify |
+| --- | --- | --- |
+| Detect personal data hiding in free-text columns and report it separately from the column's main classification | Detects embedded email addresses, Indian phone numbers, PAN, and Aadhaar. Inventory reports `embedded_pii_types`, `embedded_match_ratio`, and `embedded_confidence` separately from the primary classification. Supported PII spans are redacted in free-text evidence. | Scan the seeded source and inspect `support_tickets.ticket_body` in the inventory. Its primary type can be `NONE` while embedded types are reported. See [RULES.md](RULES.md) for format and masking limits. |
+| Re-scan behaviour that updates existing findings instead of duplicating them | A unique key on `(source_id, schema_name, table_name, column_name)` and PostgreSQL upserts update existing findings. Row IDs remain stable while classifications, risk, masked evidence, and timestamps refresh. | Scan the same unchanged source twice, then compare stored and unique column counts using the commands under **Verify rescans and inspect storage**. Both remain 26 for the supplied seed. |
+
+Embedded and primary PII column counts can overlap; they are not separate counts of distinct sensitive columns. Rescans update discovered columns but do not automatically delete findings for columns removed from the source.
+
 ## Requirements
 
 | Requirement | Details |
