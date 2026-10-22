@@ -6,9 +6,9 @@ def calculate_confidence(match_ratio: float, sample_size: int) -> float:
     return round(match_ratio * sample_weight, 2)
 
 
-def determine_risk_level(pii_type: str, embedded_pii: list[str]) -> str:
-    """Maps PII types and embedded free-text findings to enterprise risk tiers."""
-    all_types = {pii_type} | set(embedded_pii)
+def determine_risk_level(detected_types: list[str]) -> str:
+    """Use the highest tier among all validated sample types, regardless of frequency."""
+    all_types = set(detected_types)
 
     # CRITICAL: Immutable government/financial identifiers with severe regulatory impact
     if {"PAN", "AADHAAR"} & all_types:

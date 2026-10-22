@@ -280,7 +280,11 @@ class PIIClassifier:
         embedded_ratio = embedded_hit_rows / total_samples
         embedded_confidence = calculate_confidence(embedded_ratio, total_samples)
         embedded_list = sorted(embedded_hits) if is_free_text_col else []
-        risk_level = determine_risk_level(best_type, embedded_list)
+        risk_types = sorted(
+            {pii_type for pii_type, count in match_counts.items() if count > 0}
+            | embedded_hits
+        )
+        risk_level = determine_risk_level(risk_types)
 
         # Generate masked evidence samples
         masked_evidence = []
@@ -307,6 +311,12 @@ class PIIClassifier:
                 f" Detected embedded PII: {', '.join(embedded_list)} "
                 f"in {embedded_hit_rows}/{total_samples} sampled rows "
                 f"({embedded_ratio * 100:.1f}%; embedded score: {embedded_confidence})."
+            )
+
+        if risk_types:
+            justification += (
+                f" Risk {risk_level} considers all validated standalone and embedded types: "
+                f"{', '.join(risk_types)}."
             )
 
         return {

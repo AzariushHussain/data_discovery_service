@@ -300,7 +300,7 @@ Discovery/sampling failures are not reported as empty successful samples. The sc
 
 The custom classifier combines format validation and contextual rules. A misleading `notes` column containing standalone mobile numbers is detected from its values. A `phone` column containing nulls and junk does not become PII just because of its name. Names and addresses use additional structural/context signals; a column hint alone is insufficient.
 
-The highest whole-value match ratio wins if it is at least 0.25. This is an explicit sensitivity trade-off, not a statistically calibrated cutoff. Rare standalone PII below that threshold can be missed at column level. All eight types, exact regexes, tie priority, name vocabulary, address signals, and exclusions are documented in [RULES.md](RULES.md).
+The highest whole-value match ratio wins if it is at least 0.25. This is an explicit sensitivity trade-off, not a statistically calibrated cutoff. Rare standalone PII below that threshold does not become the primary classification, but still contributes to risk and is named in the justification. All eight types, exact regexes, tie priority, name vocabulary, address signals, and exclusions are documented in [RULES.md](RULES.md).
 
 ```text
 match_ratio = selected primary matches / sampled nonblank values
@@ -321,9 +321,9 @@ No samples means zero detection support, not certainty that a column is safe. Ro
 | HIGH | Email, Indian phone, postal address, DOB | Contactability, location, or identity-verification information |
 | MEDIUM | Full name | Direct identifier with limited specificity on its own |
 | LOW | Pincode | Geographic quasi-identifier |
-| NONE | No reported matching type | No supported rule triggered at the reporting threshold |
+| NONE | No validated matching type | No supported detector matched any sampled value |
 
-The highest applicable tier across primary and embedded types wins. These are application-defined priorities, not a legal determination or a calibrated loss estimate. `NONE` does not establish the absence of personal data.
+The highest applicable tier across all validated standalone and embedded types wins, including minority standalone types and matches below the primary 25% threshold. Two standalone emails plus one PAN therefore produce primary `EMAIL` and risk `CRITICAL`. One PAN among five values produces primary `NONE`, primary confidence zero, and risk `CRITICAL`; its justification names PAN. Primary and embedded column counts retain their classification-based meanings, so they can both be zero for a column with non-`NONE` risk. Risk indicates the highest observed sensitivity, not its prevalence or confidence. These are application-defined priorities, not a legal determination or a calibrated loss estimate. `NONE` does not establish the absence of personal data.
 
 ## Data hygiene and credentials
 

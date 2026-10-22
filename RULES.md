@@ -256,7 +256,7 @@ Scores use unrounded ratios before final rounding. The new metric fields are nul
 
 ## 8. Risk assignment
 
-Apply this priority to the union of primary and embedded types:
+Apply this priority to the union of every standalone type with at least one validated sample match and all validated embedded types. Do not restrict risk to the winning primary type or apply the primary 0.25 threshold:
 
 1. `CRITICAL`: PAN or Aadhaar.
 2. `HIGH`: email, Indian phone, postal address, DOB, or the reserved `FREE_TEXT` label.
@@ -265,6 +265,8 @@ Apply this priority to the union of primary and embedded types:
 5. `NONE`: none of the above.
 
 The classifier does not currently emit `FREE_TEXT` as a primary type; prose normally has primary `NONE` plus embedded findings. Risk is not multiplied by confidence and does not consider combinations across separate columns, business purpose, consent, or actual exposure. Each scanned column increments exactly one risk bucket.
+
+Two standalone emails and one PAN produce primary `EMAIL` but risk `CRITICAL`. One standalone PAN among five samples produces primary `NONE`, primary confidence zero, and risk `CRITICAL`. The justification lists all validated types used for risk, including minority and subthreshold matches. Risk is the highest observed sensitivity, not a frequency estimate or a confidence score.
 
 ## 9. Evidence selection and masking
 
@@ -330,7 +332,7 @@ Inline masking is limited by supported formats and detected types. It does not i
 - `pii_columns_detected` counts columns whose primary type is not `NONE`.
 - `embedded_pii_columns_detected` counts columns with a nonempty embedded type list. It can overlap with the primary count.
 - `risk_breakdown` assigns every scanned column exactly one tier. Its sum equals `total_columns_scanned`.
-- The API does not currently return a separate distinct-sensitive-column total. Under the current risk mapping, summing non-`NONE` tiers counts distinct columns with reported PII, not every column that might contain undetected or subthreshold PII.
+- The API does not currently return a separate distinct-sensitive-column total. Summing non-`NONE` tiers counts distinct scanned columns with any validated standalone or embedded match, including subthreshold standalone hits. Primary and embedded counts can both be zero for a column with non-`NONE` risk. Undetected or unsampled PII is not counted.
 
 ## 11. Errors and logging
 

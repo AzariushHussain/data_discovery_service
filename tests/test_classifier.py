@@ -265,3 +265,34 @@ def test_minority_phone_is_masked_even_below_column_threshold():
     result = PIIClassifier.classify_column("notes", "text", ["9876543210"] + ["N/A"] * 4)
     assert result["inferred_pii_type"] == "NONE"
     assert result["masked_evidence"][0] == "+91-******3210"
+
+
+@pytest.mark.parametrize("identifier", ["ABCPK1234F", "234567890124"])
+def test_minority_government_identifier_sets_critical_risk(identifier):
+    result = PIIClassifier.classify_column(
+        "notes", "text", ["a@example.com", "b@example.com", identifier]
+    )
+    assert result["inferred_pii_type"] == "EMAIL"
+    assert result["embedded_pii_types"] == []
+    assert result["risk_level"] == "CRITICAL"
+
+
+@pytest.mark.parametrize("value,expected_type,risk", [
+    ("ABCPK1234F", "PAN", "CRITICAL"),
+    ("9876543210", "PHONE_IN", "HIGH"),
+    ("Aarav Sharma", "FULL_NAME", "MEDIUM"),
+    ("560001", "PINCODE", "LOW"),
+])
+def test_standalone_hits_below_primary_threshold_still_set_risk(value, expected_type, risk):
+    result = PIIClassifier.classify_column("notes", "text", [value] + ["N/A"] * 4)
+    assert result["inferred_pii_type"] == "NONE"
+    assert result["match_ratio"] == 0.0
+    assert result["confidence"] == 0.0
+    assert result["embedded_pii_types"] == []
+    assert result["risk_level"] == risk
+    assert expected_type in result["justification"]
+
+
+def test_junk_only_column_has_no_risk():
+    result = PIIClassifier.classify_column("notes", "text", ["N/A", "???"])
+    assert result["risk_level"] == "NONE"
