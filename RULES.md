@@ -281,7 +281,7 @@ For each evidence value independently:
 1. If it matched one or more standalone detectors, select its own type. Prefer the column's primary type only when that individual value matched it; otherwise use the first matched type in detector priority order.
 2. Apply that type's standalone mask. Scan the retained result again for phone, PAN, and Aadhaar patterns, preventing identifiers in retained email-domain text from leaking.
 3. If the value matched no standalone type but the column has a primary PII type, return `[MIXED_CONTENT_REDACTED]` for the entire value.
-4. Otherwise, for an embedded-only text column, replace spans for the column's detected embedded types inline.
+4. Otherwise, if this sample contains validated embedded matches, return `[FREE_TEXT_REDACTED: TYPE, TYPE]`, using its sorted distinct embedded types. Include only types found in that individual sample, not every type found elsewhere in the column. Retain no source text or identifier fragments.
 5. Otherwise return `[UNCLASSIFIED_REDACTED]`. Empty sample sets produce an empty evidence array.
 
 This prevents a column-level `EMAIL` decision from treating a prose value's trailing PAN as an email domain. It also masks a minority standalone PAN using the PAN mask, even in an email-dominated column. Full-value matches below the reporting threshold are still masked by their own type.
@@ -302,7 +302,7 @@ This prevents a column-level `EMAIL` decision from treating a prose value's trai
 
 The low-level helpers have defensive fallbacks for malformed short inputs. Normal inventory evidence calls them only after recording each sample's standalone type matches. Partial masks deliberately retain some format/identifying fragments; they are not anonymization guarantees.
 
-### Inline free-text masks
+### Inline masking helper (not prose evidence)
 
 Replace matched spans with:
 
@@ -322,9 +322,9 @@ Call +91 9876543210 about PAN ABCPK1234F.
     -> Call [PHONE_REDACTED] about PAN [PAN_REDACTED].
 ```
 
-In a primary-PII column, ambiguous mixed prose is fully replaced instead of retaining this excerpt.
+This example describes the low-level `mask_free_text` helper. Inventory evidence never retains this prose excerpt: an embedded-only sample becomes `[FREE_TEXT_REDACTED: PAN, PHONE_IN]`; ambiguous mixed prose in a primary-PII column becomes `[MIXED_CONTENT_REDACTED]`.
 
-Inline masking is limited by supported formats and detected types. It does not identify arbitrary names/addresses/DOBs in prose or every way a secret could be written. Surrounding text is retained for embedded-only columns, so unknown PII can remain there. Do not describe these regex rules as universal PII sanitization.
+Inline masking is limited by supported formats and detected types. It does not identify arbitrary names/addresses/DOBs in prose or every way a secret could be written, so it is not a general privacy sanitizer. Inventory generation uses this helper only to scrub supported identifiers from already-masked standalone evidence. Free-text evidence instead fully replaces prose, including samples without supported embedded matches, preventing unsupported personal data in surrounding text from leaking. This changes evidence generation, not detector coverage. Previously stored evidence requires a rescan to be replaced; historical logs and backups remain unchanged.
 
 ## 10. Persistence, transactions, and response counts
 

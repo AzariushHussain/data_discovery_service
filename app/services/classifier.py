@@ -224,6 +224,7 @@ class PIIClassifier:
         embedded_hits = set()
         embedded_hit_rows = 0
         sample_value_types = []
+        sample_embedded_types = []
         is_free_text_col = data_type.lower().split("(", 1)[0].strip() in {
             "text", "varchar", "character varying", "char", "character"
         }
@@ -252,8 +253,8 @@ class PIIClassifier:
                 match_counts[pii_type] += 1
 
             # Free-text embedded scan
+            row_embedded_types = set()
             if is_free_text_col:
-                row_embedded_types = set()
                 detectors = (
                     ("EMAIL", EMAIL_PATTERN, cls._is_valid_email),
                     ("PHONE_IN", PHONE_IN_TEXT, cls._is_valid_phone),
@@ -269,6 +270,7 @@ class PIIClassifier:
                 if row_embedded_types:
                     embedded_hit_rows += 1
                     embedded_hits.update(row_embedded_types)
+            sample_embedded_types.append(sorted(row_embedded_types))
 
         # Determine primary PII type with highest match ratio >= 0.25 threshold
         best_type = "NONE"
@@ -296,7 +298,9 @@ class PIIClassifier:
 
         # Generate masked evidence samples
         masked_evidence = []
-        for val, value_types in zip(samples[:3], sample_value_types[:3]):
+        for val, value_types, row_types in zip(
+            samples[:3], sample_value_types[:3], sample_embedded_types[:3]
+        ):
             if value_types:
                 evidence_type = best_type if best_type in value_types else value_types[0]
                 evidence = mask_value(evidence_type, str(val))
@@ -304,8 +308,9 @@ class PIIClassifier:
                 masked_evidence.append(mask_free_text(evidence, ["PHONE_IN", "PAN", "AADHAAR"]))
             elif best_type != "NONE":
                 masked_evidence.append("[MIXED_CONTENT_REDACTED]")
-            elif is_free_text_col and embedded_list:
-                masked_evidence.append(mask_free_text(val, embedded_list))
+            elif row_types:
+                # Supported inline masks cannot sanitize unknown PII in surrounding prose.
+                masked_evidence.append(f"[FREE_TEXT_REDACTED: {', '.join(row_types)}]")
             else:
                 masked_evidence.append("[UNCLASSIFIED_REDACTED]")
 

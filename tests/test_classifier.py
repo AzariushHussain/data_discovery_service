@@ -36,7 +36,7 @@ def test_embedded_pii_in_arbitrarily_named_text_column(data_type):
     assert result["inferred_pii_type"] == "NONE"
     assert result["embedded_pii_types"] == ["PAN", "PHONE_IN"]
     assert result["risk_level"] == "CRITICAL"
-    assert result["masked_evidence"] == ["Call [PHONE_REDACTED]; PAN: [PAN_REDACTED]."]
+    assert result["masked_evidence"] == ["[FREE_TEXT_REDACTED: PAN, PHONE_IN]"]
 
 
 def test_at_sign_alone_is_not_email():
@@ -377,3 +377,33 @@ def test_pincode_guard_rejects_identifier_and_money_tokens(column_name):
 def test_pincode_name_does_not_override_invalid_values(value):
     result = PIIClassifier.classify_column("pincode", "TEXT", [value])
     assert result["inferred_pii_type"] == "NONE"
+
+
+@pytest.mark.parametrize("private_text", [
+    "ask for Zoya Abidi tomorrow",
+    "deliver to 18 Maple Road, Pune 411001",
+    "my birth date is 2000-01-01",
+])
+def test_embedded_evidence_does_not_retain_unsupported_personal_data(private_text):
+    result = PIIClassifier.classify_column(
+        "notes", "TEXT", [f"Please call 9876543210 and {private_text}."]
+    )
+    assert result["inferred_pii_type"] == "NONE"
+    assert result["embedded_pii_types"] == ["PHONE_IN"]
+    assert result["masked_evidence"] == ["[FREE_TEXT_REDACTED: PHONE_IN]"]
+    assert private_text not in result["masked_evidence"][0]
+    assert "9876543210" not in result["masked_evidence"][0]
+
+
+def test_embedded_evidence_lists_only_types_detected_in_each_sample():
+    result = PIIClassifier.classify_column("notes", "TEXT", [
+        "Call 9876543210 and ask for Zoya Abidi tomorrow.",
+        "Please verify PAN ABCPK1234F before dispatch.",
+        "Please deliver to Zoya Abidi tomorrow.",
+    ])
+    assert result["embedded_pii_types"] == ["PAN", "PHONE_IN"]
+    assert result["masked_evidence"] == [
+        "[FREE_TEXT_REDACTED: PHONE_IN]",
+        "[FREE_TEXT_REDACTED: PAN]",
+        "[UNCLASSIFIED_REDACTED]",
+    ]
