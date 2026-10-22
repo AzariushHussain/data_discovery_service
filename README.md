@@ -412,13 +412,13 @@ Run all default tests with one command after starting the app:
 docker compose exec app pytest -q
 ```
 
-The default suite includes classification, masking, logs without raw samples, misleading metadata, supported Unicode names, embedded ratios, permission/timeouts, and sanitized connector failures. PostgreSQL integration tests skip unless `TEST_DATABASE_URL` is provided.
+The default suite includes classification, masking, logs without raw samples, misleading metadata, supported Unicode names, embedded ratios, permission/timeouts, and sanitized connector failures. Transaction tests require `TEST_DATABASE_URL`; source-permission tests require `TEST_SOURCE_DATABASE_URL`. Without those variables, the corresponding integration tests skip.
 
-Run the complete suite including rollback/commit integration tests:
+Run the complete suite, including rollback/commit and read-only source-permission tests, against the local demo services after setup:
 
 ```bash
 docker compose exec -T app sh -c \
-  'TEST_DATABASE_URL="$DATABASE_URL" pytest -q'
+  'TEST_DATABASE_URL="$DATABASE_URL" TEST_SOURCE_DATABASE_URL="postgresql+psycopg://discovery_reader:discovery_reader_password@sample_source_db:5432/ecommerce_prod" pytest -q'
 ```
 
 Integration tests create uniquely named temporary schemas in the selected PostgreSQL database and remove them afterward. They require schema-creation privileges and verify that partial upserts and timestamps roll back on connection, discovery, sampling, classification, secret retrieval, and commit failures. They also cover stale-finding cleanup, renames, empty discovery, source isolation, and overlapping scan rejection. They do not modify existing source rows. The selected database must be PostgreSQL, not SQLite.
@@ -443,11 +443,11 @@ Actual source scanning and local Alembic commands additionally require reachable
 
 ### Verification performed
 
-The setup helper was verified against disposable OpenBao 2.7.1 and PostgreSQL containers on 2026-10-22. Checks covered fresh initialization, private credential files, restricted-token KV operations, restart/unseal with operator prompts, token-file replacement, preservation of existing secrets, and rejection of an invalid administrator token without replacing the working app token. The default suite passed **245 tests**; eight PostgreSQL integration tests were skipped in that run. Existing development vault data was not used or reset.
+On 2026-10-22, committed code at `b345814` was extracted into a clean directory and verified in a separate Compose project with fresh PostgreSQL and OpenBao volumes and random loopback ports. The one-command setup completed, migrations reached Alembic head, and all five API endpoints passed checks for registration, inventory filters, column details, expected seed classifications, and masked free-text evidence. Repeated scans preserved all 26 column IDs. Renaming a real source column replaced its inventory entry, preserved unchanged IDs, and made the old detail URL return 404. The metadata schema contained neither a plaintext nor a masked DSN column.
 
-On 2026-10-21, the setup was exercised in a separately named Compose project with fresh PostgreSQL and OpenBao volumes. Verification covered volume ownership, OpenBao initialization/unsealing, policy and restricted-token provisioning, image build, the complete migration chain, all five API endpoints, inventory filters, expected seed classifications, and duplicate-free rescans. The complete suite passed: **148 tests**, including all seven PostgreSQL transaction tests.
+The complete suite passed **264 tests with no skips**, including PostgreSQL transaction and actual read-only source-permission checks. Earlier isolated helper checks also covered private credential files, restricted-token KV operations, restart/unseal with operator prompts, token-file replacement, preservation of existing secrets, and rejection of an invalid administrator token without replacing the working app token.
 
-The verification project used separate container names and no published host ports; HTTP checks ran inside its API container. Its containers, volumes, network, temporary token, and image tag were removed afterward. Existing development resources were not reset. The test run emitted a Starlette/httpx deprecation warning but no test failures; dependency-version pinning and migration to the future test-client interface remain maintenance work.
+The disposable containers, volumes, network, temporary credentials, and image tag were removed afterward. Existing development resources were not reset. The test run emitted one Starlette/httpx deprecation warning and no test failures; dependency-version pinning and migration to the future test-client interface remain maintenance work.
 
 ## Verify rescans and inspect storage
 
