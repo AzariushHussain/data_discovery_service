@@ -470,3 +470,44 @@ def test_combined_embedded_sample_can_demonstrate_more_than_three_types():
         "[FREE_TEXT_REDACTED: EMAIL]",
         "[FREE_TEXT_REDACTED: AADHAAR]",
     ]
+
+
+@pytest.mark.parametrize("matches,primary,ratio", [
+    (24, "NONE", 0.0), (25, "EMAIL", 0.25), (26, "EMAIL", 0.26),
+])
+def test_primary_threshold_boundary_preserves_risk(matches, primary, ratio):
+    result = PIIClassifier.classify_column(
+        "notes", "TEXT", ["contact@example.com"] * matches + ["N/A"] * (100 - matches)
+    )
+    assert result["inferred_pii_type"] == primary
+    assert result["match_ratio"] == ratio
+    assert result["confidence"] == ratio
+    assert result["risk_level"] == "HIGH"
+    if primary == "NONE":
+        assert "24/100" in result["justification"]
+        assert "25%" in result["justification"]
+
+
+def test_one_valid_sample_can_classify_with_small_support_score():
+    result = PIIClassifier.classify_column("notes", "TEXT", ["9876543210"])
+    assert result["inferred_pii_type"] == "PHONE_IN"
+    assert result["match_ratio"] == 1.0
+    assert result["confidence"] == 0.05
+
+
+def test_embedded_reporting_does_not_use_primary_threshold():
+    result = PIIClassifier.classify_column(
+        "notes", "TEXT", ["N/A"] * 99 + ["Call 9876543210 tomorrow."]
+    )
+    assert result["inferred_pii_type"] == "NONE"
+    assert result["embedded_pii_types"] == ["PHONE_IN"]
+    assert result["embedded_match_ratio"] == 0.01
+    assert result["embedded_confidence"] == 0.01
+    assert result["risk_level"] == "HIGH"
+
+
+def test_equal_primary_ratios_use_documented_priority_not_risk():
+    result = PIIClassifier.classify_column("notes", "TEXT", ["contact@example.com", "ABCPK1234F"])
+    assert result["inferred_pii_type"] == "EMAIL"
+    assert result["match_ratio"] == 0.5
+    assert result["risk_level"] == "CRITICAL"

@@ -38,10 +38,10 @@ class ColumnInventoryResponse(BaseModel):
     inferred_pii_type: str
     embedded_pii_types: list[str]
     confidence: float = Field(
-        description="Primary match ratio weighted by sample size; a heuristic, not a probability."
+        description="Primary match ratio weighted by sample size; zero when primary is NONE. A heuristic, not a probability of correctness or absence of PII."
     )
     match_ratio: float | None = Field(
-        description="Fraction of sampled values matching the inferred primary type; null until rescanned."
+        description="Fraction matching the selected primary type; zero if no type reaches 25%. Subthreshold candidates are explained in justification; null until rescanned."
     )
     embedded_match_ratio: float | None = Field(
         description="Fraction of sampled values with PII inside surrounding text; null until rescanned."

@@ -15,6 +15,7 @@ from app.services.masker import (
 from app.services.risk import calculate_confidence, determine_risk_level
 
 logger = logging.getLogger(__name__)
+PRIMARY_MATCH_THRESHOLD = 0.25
 
 
 class PIIClassifier:
@@ -282,7 +283,8 @@ class PIIClassifier:
                 best_ratio = ratio
                 best_type = pii_type
 
-        if best_ratio < 0.25:
+        candidate_type, candidate_ratio = best_type, best_ratio
+        if best_ratio < PRIMARY_MATCH_THRESHOLD:
             best_type = "NONE"
             best_ratio = 0.0
 
@@ -341,9 +343,19 @@ class PIIClassifier:
             else:
                 masked_evidence.append("[UNCLASSIFIED_REDACTED]")
 
-        justification = (
-            f"Classified as {best_type} based on {best_ratio * 100:.1f}% value match ratio "
-            f"across {total_samples} sampled rows. "
+        if best_type == "NONE" and candidate_ratio > 0:
+            justification = (
+                f"No primary type reached the {PRIMARY_MATCH_THRESHOLD:.0%} match threshold. "
+                f"Highest standalone candidate {candidate_type} matched "
+                f"{match_counts[candidate_type]}/{total_samples} sampled rows "
+                f"({candidate_ratio:.1%}). Reported primary ratio and score are zero. "
+            )
+        else:
+            justification = (
+                f"Classified as {best_type} based on {best_ratio * 100:.1f}% value match ratio "
+                f"across {total_samples} sampled rows. "
+            )
+        justification += (
             f"Primary sample-weighted score: {confidence}; scores are heuristic, not probabilities."
         )
         if is_free_text_col and embedded_list:

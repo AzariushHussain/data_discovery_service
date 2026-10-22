@@ -200,11 +200,11 @@ Each sample can match more than one detector. Count matches independently for ev
 
 - Select the type with the greatest match ratio, provided it reaches 0.25.
 - Ties keep the first type in this order: `EMAIL`, `PHONE_IN`, `PAN`, `AADHAAR`, `PINCODE`, `DOB`, `FULL_NAME`, `POSTAL_ADDRESS`.
-- When the largest ratio is below 0.25, report `NONE` and reset the reported primary `match_ratio` and `confidence` to zero. Minority matches still participate in per-value evidence masking; their raw count is not separately retained.
+- When the largest ratio is below `PRIMARY_MATCH_THRESHOLD` (0.25), report `NONE` and reset the reported primary `match_ratio` and `confidence` to zero. The justification records the highest candidate's type, actual match count/ratio, and cutoff. Minority matches still affect risk and evidence; there is no separate structured per-type count field.
 - Empty input reports `NONE`, zero scores/ratios, empty evidence, and a no-samples justification.
 - No numeric 85/15 metadata weighting is implemented. Column metadata provides the specific guards and supporting signals documented above.
 
-The 0.25 threshold favors noticing a minority of sensitive values, but is not learned from labeled data. `NONE` means no primary type met the rule/threshold; it does not prove the column contains no PII.
+The 0.25 threshold permits a recurring minority (one in four nonblank samples) to set the primary label, rather than requiring a majority. It is not learned from labelled data. For 24/100 email matches, primary is `NONE` and the justification states 24/100 and the 25% cutoff; for 25/100, primary is `EMAIL`. Risk and evidence consider both cases. `NONE` does not prove the column contains no PII.
 
 ## 6. Embedded detection
 
@@ -239,7 +239,7 @@ embedded_match_ratio = round(e, 4)
 embedded_confidence = round(e * sample_weight, 2)
 ```
 
-All four values are zero for empty samples. Confidence is not confidence in the absence of PII. The sample threshold of 20 is an arbitrary documented heuristic, not a minimum scientifically sufficient sample size. Samples are not random, and a 1.0 score is not proof of detector accuracy or population coverage.
+All four values are zero for empty samples. Confidence is not confidence in the absence of PII. `CONFIDENCE_SAMPLE_TARGET` (20) is the point where the linear small-sample discount saturates, not a minimum scientifically sufficient sample size. One matching value can classify a column with score 0.05. Samples are not random, duplicate values count as separate rows, and a 1.0 score is not proof of independent evidence, detector accuracy, or population coverage. Boundary regression tests verify the rules, not calibration or real-world precision/recall. Evaluate separate labelled data before changing these constants.
 
 | Example | Match ratio | Weight | Score |
 | --- | --- | --- | --- |

@@ -321,6 +321,14 @@ The ratios returned in inventory are rounded to four decimal places. Scores are 
 
 No samples means zero detection support, not certainty that a column is safe. Rows predating the score-field migration have null new metrics until rescanned.
 
+### Why 25% and 20 samples?
+
+`PRIMARY_MATCH_THRESHOLD = 0.25` permits a recurring minority (one in four sampled nonblank values) to determine the primary label. It is a deliberate sensitivity choice, not a learned optimum or a claim that most rows match. At 24 matching values out of 100, primary remains `NONE` with primary ratio/score zero, but the justification reports the actual 24/100 candidate matches and the 25% cutoff. Risk and evidence still consider those validated matches. At 25/100 the primary label is assigned. Embedded detection reports any validated hit and does not use this cutoff.
+
+`CONFIDENCE_SAMPLE_TARGET = 20` linearly discounts small samples and caps that discount at 20 values. It is not a minimum sample requirement: one matching phone can produce primary `PHONE_IN` with ratio 1.0 and score 0.05; eight matching values score 0.4. The target is a transparent heuristic, not a statistically justified sample size. Repeated identical values still count as separate sampled rows, so duplicates can inflate apparent support. Neither a score of 1.0 nor 20 matches proves correctness, independence, or coverage of unsampled data.
+
+Tests cover the 24%/25%/26% boundary, score weighting below/at/above 20 samples, deterministic type ties, and embedded hits below 25%. These tests verify the chosen rules; they do not measure real-world precision/recall. Before tuning either constant, evaluate separate labelled positive and negative examples, report mistakes by PII type, and measure the effect of alternative cutoffs on column labels. Detector accuracy and score calibration require independent evaluation data; they are not established by the seed or this regression suite.
+
 | Risk | Types | Rationale |
 | --- | --- | --- |
 | CRITICAL | PAN, Aadhaar | Government/financial identity exposure |

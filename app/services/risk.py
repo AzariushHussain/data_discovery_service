@@ -1,8 +1,11 @@
+CONFIDENCE_SAMPLE_TARGET = 20
+
+
 def calculate_confidence(match_ratio: float, sample_size: int) -> float:
     """Heuristic match support weighted by sample size, not a calibrated probability."""
     if sample_size == 0:
         return 0.0
-    sample_weight = min(1.0, sample_size / 20.0)
+    sample_weight = min(1.0, sample_size / CONFIDENCE_SAMPLE_TARGET)
     return round(match_ratio * sample_weight, 2)
 
 
