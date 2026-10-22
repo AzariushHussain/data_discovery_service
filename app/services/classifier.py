@@ -296,11 +296,38 @@ class PIIClassifier:
         )
         risk_level = determine_risk_level(risk_types)
 
-        # Generate masked evidence samples
+        # Cover the highest-risk types before filling remaining slots with other matches.
+        sample_types = [
+            set(value_types) | set(row_types)
+            for value_types, row_types in zip(sample_value_types, sample_embedded_types)
+        ]
+        risk_priority = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "NONE": 4}
+        type_order = sorted(risk_types, key=lambda pii_type: (
+            risk_priority[determine_risk_level([pii_type])], pii_type != best_type, pii_type
+        ))
+        selected = set()
+        covered = set()
+        for pii_type in type_order:
+            if len(selected) == 3:
+                break
+            if pii_type in covered:
+                continue
+            index = max(
+                (i for i, types in enumerate(sample_types) if pii_type in types),
+                key=lambda i: len(sample_types[i] - covered),
+            )
+            selected.add(index)
+            covered.update(sample_types[index])
+        for index in sorted(range(len(samples)), key=lambda i: not bool(sample_types[i])):
+            if len(selected) == 3:
+                break
+            selected.add(index)
+
         masked_evidence = []
-        for val, value_types, row_types in zip(
-            samples[:3], sample_value_types[:3], sample_embedded_types[:3]
-        ):
+        for index in sorted(selected):
+            val = samples[index]
+            value_types = sample_value_types[index]
+            row_types = sample_embedded_types[index]
             if value_types:
                 evidence_type = best_type if best_type in value_types else value_types[0]
                 evidence = mask_value(evidence_type, str(val))

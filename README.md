@@ -274,6 +274,8 @@ Filters are case-normalized to uppercase. `pii_type` filters the primary inferre
 
 Each column includes its location and database type, primary and embedded classifications, scores, risk, sample size, null count, up to three masked evidence samples, justification, and update timestamp.
 
+Evidence is selected across all sampled values. Higher-risk types are represented first; within the same risk tier, the primary type wins ties before alphabetical type order. Samples covering multiple detected types are preferred, and remaining slots use other matches before junk. The selected examples are displayed in their original sample order. This lets a rare PAN later in an email-dominated sample appear in evidence. Three examples may not cover every type, and detection outside the bounded sample is not implied. See [RULES.md](RULES.md) for the exact selection and masking rules.
+
 ### Inspect one finding
 
 Set `COLUMN_ID` to an inventory row's `id`:

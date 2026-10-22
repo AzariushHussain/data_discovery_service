@@ -407,3 +407,66 @@ def test_embedded_evidence_lists_only_types_detected_in_each_sample():
         "[FREE_TEXT_REDACTED: PAN]",
         "[UNCLASSIFIED_REDACTED]",
     ]
+
+
+def test_evidence_includes_primary_matches_after_initial_junk():
+    result = PIIClassifier.classify_column(
+        "notes", "TEXT", ["N/A"] * 6 + ["contact@example.com"] * 4
+    )
+    assert result["inferred_pii_type"] == "EMAIL"
+    assert result["match_ratio"] == 0.4
+    assert "co*****@example.com" in result["masked_evidence"]
+    assert len(result["masked_evidence"]) == 3
+
+
+def test_evidence_includes_minority_pan_after_primary_email_samples():
+    result = PIIClassifier.classify_column(
+        "notes", "TEXT", ["contact@example.com"] * 9 + ["ABCPK1234F"]
+    )
+    assert result["inferred_pii_type"] == "EMAIL"
+    assert result["risk_level"] == "CRITICAL"
+    assert "ABC******F" in result["masked_evidence"]
+    assert "co*****@example.com" in result["masked_evidence"]
+
+
+def test_evidence_prioritizes_high_risk_types_when_only_three_fit():
+    result = PIIClassifier.classify_column("notes", "TEXT", [
+        "560001", "Aarav Sharma", "contact@example.com", "9876543210",
+        "ABCPK1234F", "234567890124",
+    ])
+    assert result["risk_level"] == "CRITICAL"
+    assert result["masked_evidence"] == [
+        "co*****@example.com", "ABC******F", "XXXX-XXXX-0124",
+    ]
+
+
+def test_evidence_selects_late_embedded_findings_without_retaining_prose():
+    result = PIIClassifier.classify_column("notes", "TEXT", [
+        "N/A", "N/A", "N/A", "N/A",
+        "Please verify PAN ABCPK1234F for Zoya Abidi.",
+        "Email contact@example.com and call 9876543210 tomorrow.",
+    ])
+    assert "[FREE_TEXT_REDACTED: PAN]" in result["masked_evidence"]
+    assert "[FREE_TEXT_REDACTED: EMAIL, PHONE_IN]" in result["masked_evidence"]
+    assert len(result["masked_evidence"]) == 3
+    assert all("Zoya" not in item for item in result["masked_evidence"])
+
+
+def test_evidence_uses_remaining_slots_for_matches_before_junk():
+    result = PIIClassifier.classify_column("notes", "TEXT", ["N/A"] * 4 + ["a@example.com"] * 3)
+    assert result["masked_evidence"] == ["*@example.com"] * 3
+
+
+def test_combined_embedded_sample_can_demonstrate_more_than_three_types():
+    result = PIIClassifier.classify_column("notes", "TEXT", [
+        "Please call 9876543210 tomorrow.",
+        "Please verify PAN ABCPK1234F.",
+        "Please verify PAN ABCPK1234F and call 9876543210.",
+        "Email contact@example.com tomorrow.",
+        "Please verify UID 234567890124.",
+    ])
+    assert result["masked_evidence"] == [
+        "[FREE_TEXT_REDACTED: PAN, PHONE_IN]",
+        "[FREE_TEXT_REDACTED: EMAIL]",
+        "[FREE_TEXT_REDACTED: AADHAAR]",
+    ]

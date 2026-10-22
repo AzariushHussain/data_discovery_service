@@ -266,7 +266,14 @@ Two standalone emails and one PAN produce primary `EMAIL` but risk `CRITICAL`. O
 
 ## 9. Evidence selection and masking
 
-Persist up to the first three returned sample values as evidence, after masking. These are not chosen to maximize representativeness; rare matches later in the sample may not appear in the evidence examples.
+Persist up to three masked examples selected from all returned nonblank samples, not merely the first three:
+
+1. Consider validated types in descending risk order. Within one tier, prefer the primary type, then use alphabetical type order for deterministic ties.
+2. For each type not yet covered, select a matching sample that covers the most additional uncovered standalone/embedded types. Ties use the earliest sampled value. A single sample may cover multiple types.
+3. Stop at three selected samples. Fill any remaining slots with other matching samples first, then nonmatching samples, preserving sample order within each group.
+4. Return selected examples in their original sample order, applying the privacy rules below. Selection does not change classifications, ratios, confidence, or risk.
+
+This can show a PAN found after the first three sampled values, even when emails dominate the column. Three slots cannot guarantee evidence for every detected type, and fully redacted mixed-content markers do not expose their underlying values. The detector results and justification remain the complete reported type summary. Selection covers only the bounded sample, not unsampled source rows.
 
 For each evidence value independently:
 
