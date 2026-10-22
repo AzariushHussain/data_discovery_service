@@ -227,6 +227,8 @@ class PIIClassifier:
         is_free_text_col = data_type.lower().split("(", 1)[0].strip() in {
             "text", "varchar", "character varying", "char", "character"
         }
+        name = re.sub(r"([a-z])([A-Z])", r"\1_\2", column_name).lower()
+        column_tokens = set(re.findall(r"[a-z]+", name))
 
         for val in samples:
             val_clean = str(val).strip()
@@ -237,8 +239,8 @@ class PIIClassifier:
                 "PAN": cls._is_valid_pan(val_clean),
                 "AADHAAR": bool(val_clean) and val_clean[0] in "23456789"
                 and cls._validate_verhoeff(val_clean),
-                "PINCODE": cls._is_valid_pincode(val_clean) and not any(
-                    k in column_name.lower() for k in {"id", "amount", "price", "count", "total", "invoice"}
+                "PINCODE": cls._is_valid_pincode(val_clean) and not (
+                    column_tokens & {"id", "amount", "price", "count", "total", "invoice"}
                 ),
                 "DOB": cls._is_valid_dob(val_clean, column_name),
                 "FULL_NAME": is_free_text_col and cls._is_valid_full_name(val_clean, column_name),

@@ -111,13 +111,15 @@ Pattern:
 ^[1-8]\d{5}$
 ```
 
-Reject matches when the lowercased column name contains any of these substrings:
+Split camelCase boundaries, lowercase the column name, and extract alphabetic tokens. Reject matches only when a complete token is one of:
 
 ```text
 id amount price count total invoice
 ```
 
-This is a simple collision guard, not a token-aware metadata model. It can reject legitimate postal columns containing those substrings and can accept other six-digit identifiers. There is no postal-directory lookup. Unlike the other numeric patterns above, the final five digits use Python `\d`, which also accepts Unicode decimal digits.
+For example, `customer_id`, `customerId`, and `invoice_number` are excluded, while `residential_pincode`, `country_pincode`, and `account_pincode` are eligible: `id` inside `residential` and `count` inside `country` or `account` are not separate tokens. Generic names such as `notes` and `field_1` also remain eligible. A pincode-related name never bypasses value validation.
+
+This is a limited collision guard, not a postal-directory lookup. A six-digit identifier in an unrecognized column can still match; a genuine pincode under an excluded identifier/money token can be missed. Names without word or camelCase boundaries, such as `customerid`, are not recognized as `id` tokens. Unlike the other numeric patterns above, the final five digits use Python `\d`, which also accepts Unicode decimal digits.
 
 ### DOB
 

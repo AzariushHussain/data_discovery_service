@@ -350,3 +350,30 @@ def test_birth_date_today_is_valid_but_tomorrow_is_not():
     today = date.today()
     assert PIIClassifier._is_valid_dob(today.isoformat(), "dob")
     assert not PIIClassifier._is_valid_dob((today + timedelta(days=1)).isoformat(), "dob")
+
+
+@pytest.mark.parametrize("column_name", [
+    "residential_pincode", "residentialPincode", "country_pincode",
+    "account_pincode", "pincode", "notes", "field_1",
+])
+def test_pincode_guard_does_not_reject_partial_word_matches(column_name):
+    result = PIIClassifier.classify_column(column_name, "TEXT", ["560001"])
+    assert result["inferred_pii_type"] == "PINCODE"
+    assert result["risk_level"] == "LOW"
+    assert result["masked_evidence"] == ["56****"]
+
+
+@pytest.mark.parametrize("column_name", [
+    "id", "customer_id", "customerId", "customerID", "invoice_number", "invoiceNumber",
+    "order_amount", "unit_price", "item_count", "order_total", "CUSTOMER_ID",
+])
+def test_pincode_guard_rejects_identifier_and_money_tokens(column_name):
+    result = PIIClassifier.classify_column(column_name, "INTEGER", ["560001"])
+    assert result["inferred_pii_type"] == "NONE"
+    assert result["risk_level"] == "NONE"
+
+
+@pytest.mark.parametrize("value", ["012345", "912345", "5600012", "56000", "abc", "Bengaluru 560001"])
+def test_pincode_name_does_not_override_invalid_values(value):
+    result = PIIClassifier.classify_column("pincode", "TEXT", [value])
+    assert result["inferred_pii_type"] == "NONE"
